@@ -88,3 +88,20 @@ jobs:
           gh release create ${{ env.GIT_TAG }} --notes-file Notes.md --title "Rotorflight ${{ env.GH_TYPE }} ${{ env.GIT_VER }}" obj/*.hex
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish:
+    needs: build
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        run: |
+          VERSION=$(date +%Y%m%d)-${GITHUB_SHA:0:7}
+          gh release create nightly --title "Nightly Build $VERSION" --notes "Auto-generated nightly build" artifacts/**/*.hex
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
