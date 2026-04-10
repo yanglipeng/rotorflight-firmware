@@ -24,6 +24,7 @@
 
 #include "pg/pg_ids.h"
 #include "pg/telemetry.h"
+#include "telemetry/sensors.h"
 
 
 PG_REGISTER_WITH_RESET_TEMPLATE(telemetryConfig_t, telemetryConfig, PG_TELEMETRY_CONFIG, 6);
@@ -48,40 +49,21 @@ PG_RESET_TEMPLATE(telemetryConfig_t, telemetryConfig,
     .crsf_telemetry_mode = CRSF_TELEMETRY_MODE_NATIVE,
     .crsf_telemetry_link_rate = 250,
     .crsf_telemetry_link_ratio = 8,
+#ifdef USE_TELEMETRY
     .telemetry_sensors = {
-        TELEM_BATTERY_VOLTAGE,
-        TELEM_BATTERY_CURRENT,
-        TELEM_BATTERY_CONSUMPTION,
-        TELEM_ESC_TEMP,
-        TELEM_MOTOR_TEMP,
-        TELEM_RPM,
-        TELEM_FLIGHT_MODE,
-        TELEM_ARMING_FLAGS,
-#ifdef USE_GPS
-        TELEM_GPS,
-        TELEM_GPS_SATS,
-        TELEM_GPS_HOME_DISTANCE,
-        TELEM_GPS_HOME_DIRECTION,
-#endif
-        0, 0, 0, 0
+        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE,
+        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE,
+        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE,
+        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE
     },
     .telemetry_interval = {
-        100,
-        100,
-        1000,
-        500,
-        500,
-        100,
-        250,
-        500,
-#ifdef USE_GPS
-        200,
-        1000,
-        500,
-        1000,
-#endif
-        0, 0, 0, 0
+        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0
     },
+#else
+    .telemetry_sensors = INIT_ZERO,
+    .telemetry_interval = INIT_ZERO,
+#endif
 );
 
 #endif
