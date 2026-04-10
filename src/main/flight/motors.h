@@ -18,6 +18,7 @@
 #pragma once
 
 #include "platform.h"
+#include "common/time.h"
 
 #define MOTOR_OVERRIDE_OFF             0
 #define MOTOR_OVERRIDE_MIN         -1000

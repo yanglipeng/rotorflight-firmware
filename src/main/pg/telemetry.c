@@ -59,10 +59,10 @@ PG_RESET_TEMPLATE(telemetryConfig_t, telemetryConfig,
     .telemetry_interval = {
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0
-    },
+    }
 #else
     .telemetry_sensors = INIT_ZERO,
-    .telemetry_interval = INIT_ZERO,
+    .telemetry_interval = INIT_ZERO
 #endif
 );
 
