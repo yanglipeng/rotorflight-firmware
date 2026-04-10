@@ -38,7 +38,7 @@ PG_RESET_TEMPLATE(telemetryConfig_t, telemetryConfig,
     .frsky_unit = UNIT_METRIC,
     .frsky_vfas_precision = 0,
     .hottAlarmSoundInterval = 5,
-    .report_cell_voltage = false,
+    .report_cell_voltage = true,
     .flysky_sensors = {
         IBUS_SENSOR_TYPE_TEMPERATURE,
         IBUS_SENSOR_TYPE_RPM_FLYSKY,
@@ -48,8 +48,40 @@ PG_RESET_TEMPLATE(telemetryConfig_t, telemetryConfig,
     .crsf_telemetry_mode = CRSF_TELEMETRY_MODE_NATIVE,
     .crsf_telemetry_link_rate = 250,
     .crsf_telemetry_link_ratio = 8,
-    .telemetry_sensors = INIT_ZERO,
-    .telemetry_interval = INIT_ZERO,
+    .telemetry_sensors = {
+        TELEM_BATTERY_VOLTAGE,
+        TELEM_BATTERY_CURRENT,
+        TELEM_BATTERY_CONSUMPTION,
+        TELEM_ESC_TEMP,
+        TELEM_MOTOR_TEMP,
+        TELEM_RPM,
+        TELEM_FLIGHT_MODE,
+        TELEM_ARMING_FLAGS,
+#ifdef USE_GPS
+        TELEM_GPS,
+        TELEM_GPS_SATS,
+        TELEM_GPS_HOME_DISTANCE,
+        TELEM_GPS_HOME_DIRECTION,
+#endif
+        0, 0, 0, 0
+    },
+    .telemetry_interval = {
+        100,
+        100,
+        1000,
+        500,
+        500,
+        100,
+        250,
+        500,
+#ifdef USE_GPS
+        200,
+        1000,
+        500,
+        1000,
+#endif
+        0, 0, 0, 0
+    },
 );
 
 #endif
