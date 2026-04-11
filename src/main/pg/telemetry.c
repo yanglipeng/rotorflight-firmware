@@ -49,21 +49,8 @@ PG_RESET_TEMPLATE(telemetryConfig_t, telemetryConfig,
     .crsf_telemetry_mode = CRSF_TELEMETRY_MODE_NATIVE,
     .crsf_telemetry_link_rate = 250,
     .crsf_telemetry_link_ratio = 8,
-#ifdef USE_TELEMETRY
-    .telemetry_sensors = {
-        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE,
-        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE,
-        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE,
-        TELEM_NONE, TELEM_NONE, TELEM_NONE, TELEM_NONE
-    },
-    .telemetry_interval = {
-        0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0
-    }
-#else
     .telemetry_sensors = INIT_ZERO,
     .telemetry_interval = INIT_ZERO
-#endif
 );
 
 #endif
