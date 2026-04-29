@@ -310,6 +310,7 @@ float getSpoolUpRatio(void)
             case GOV_STATE_THROTTLE_OFF:
             case GOV_STATE_THROTTLE_HOLD:
             case GOV_STATE_THROTTLE_IDLE:
+            case GOV_STATE_PULSE_START:
             case GOV_STATE_AUTOROTATION:
                 return 0;
 
@@ -354,6 +355,7 @@ bool isSpooledUp(void)
             case GOV_STATE_THROTTLE_OFF:
             case GOV_STATE_THROTTLE_HOLD:
             case GOV_STATE_THROTTLE_IDLE:
+            case GOV_STATE_PULSE_START:
                 return false;
         }
         return false;
