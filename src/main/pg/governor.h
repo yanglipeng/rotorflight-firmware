@@ -89,7 +89,7 @@ typedef struct governorConfig_s {
     uint8_t  gov_ff_filter;
     uint8_t  gov_d_filter;
     uint8_t  gov_pulse_enable;
-    uint8_t  gov_pulse_throttle;
+    uint16_t gov_pulse_throttle;
     uint8_t  gov_pulse_count;
     uint8_t  gov_pulse_on_time;
     uint8_t  gov_pulse_off_time;

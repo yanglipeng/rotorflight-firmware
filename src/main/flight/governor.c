@@ -1716,7 +1716,7 @@ void INIT_CODE governorInit(const pidProfile_t *pidProfile)
             gov.handoverThrottle = governorConfig()->gov_handover_throttle / 100.0f;
 
             gov.pulseStartEnabled = (governorConfig()->gov_pulse_enable != 0);
-            gov.pulseThrottle = governorConfig()->gov_pulse_throttle / 100.0f;
+            gov.pulseThrottle = governorConfig()->gov_pulse_throttle / 1000.0f;
             gov.pulseCount = governorConfig()->gov_pulse_count;
             gov.pulseOnTime = governorConfig()->gov_pulse_on_time * 10;
             gov.pulseOffTime = governorConfig()->gov_pulse_off_time * 10;
