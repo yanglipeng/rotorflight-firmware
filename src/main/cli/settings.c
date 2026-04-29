@@ -955,6 +955,11 @@ const clivalue_t valueTable[] = {
     { "gov_tta_filter",             VAR_UINT8  | MASTER_VALUE,  .config.minmaxUnsigned = { 0, 250 }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_tta_filter) },
     { "gov_ff_filter",              VAR_UINT8  | MASTER_VALUE,  .config.minmaxUnsigned = { 0, 250 }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_ff_filter) },
     { "gov_d_filter",               VAR_UINT8  | MASTER_VALUE,  .config.minmaxUnsigned = { 0, 250 }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_d_filter) },
+    { "gov_pulse_enable",            VAR_UINT8  | MASTER_VALUE | MODE_LOOKUP, .config.lookup = { TABLE_OFF_ON }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_pulse_enable) },
+    { "gov_pulse_throttle",         VAR_UINT8  | MASTER_VALUE,  .config.minmaxUnsigned = { 1, 20 }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_pulse_throttle) },
+    { "gov_pulse_count",            VAR_UINT8  | MASTER_VALUE,  .config.minmaxUnsigned = { 1, 10 }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_pulse_count) },
+    { "gov_pulse_on_time",          VAR_UINT8  | MASTER_VALUE,  .config.minmaxUnsigned = { 10, 100 }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_pulse_on_time) },
+    { "gov_pulse_off_time",         VAR_UINT8  | MASTER_VALUE,  .config.minmaxUnsigned = { 10, 200 }, PG_GOVERNOR_CONFIG, offsetof(governorConfig_t, gov_pulse_off_time) },
 
 // PG_CONTROLRATE_PROFILES
 #ifdef USE_PROFILE_NAMES
