@@ -93,6 +93,15 @@ typedef struct {
     // State reset requested
     bool            stateResetReq;
 
+    // Pulse start state
+    bool            pulseStartEnabled;
+    bool            pulseStartDone;
+    uint8_t         pulseCount;
+    uint8_t         pulseThrottle;
+    uint16_t        pulseOnTime;
+    uint16_t        pulseOffTime;
+    timeMs_t        pulseStartTime;
+
     // Headspeed PID spoolup active
     bool            pidSpoolupActive;
 
@@ -399,6 +408,9 @@ static void govChangeState(govState_e newState)
         gov.stateResetReq = true;
         gov.pidSpoolupActive = false;
         gov.bypassActive = false;
+
+        if (newState == GOV_STATE_THROTTLE_IDLE)
+            gov.pulseStartDone = false;
     }
 }
 
@@ -746,12 +758,24 @@ static void govUpdateDirectState(void)
 
             // Throttle is IDLE, follow with a limited ramupup rate.
             //  -- If NO throttle, move to THROTTLE_OFF
+            //  -- if pulse start enabled and not done, move to PULSE_START
             //  -- if throttle > handover, move to SPOOLUP
             case GOV_STATE_THROTTLE_IDLE:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
+                else if (gov.pulseStartEnabled && !gov.pulseStartDone && gov.throttleInput > gov.handoverThrottle) {
+                    gov.pulseStartDone = true;
+                    gov.pulseStartTime = millis();
+                    govChangeState(GOV_STATE_PULSE_START);
+                }
                 else if (gov.throttleInput > gov.handoverThrottle)
                     govChangeState(GOV_STATE_SPOOLUP);
+                break;
+
+            // Pulse start state - controlled by throttle update
+            case GOV_STATE_PULSE_START:
+                if (gov.throttleInputOff)
+                    govChangeState(GOV_STATE_THROTTLE_OFF);
                 break;
 
             // Throttle is low. If it is a mistake, give a chance to recover.
@@ -1051,6 +1075,28 @@ static void govUpdateGovernedThrottle(void)
         case GOV_STATE_THROTTLE_IDLE:
             govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
             break;
+        case GOV_STATE_PULSE_START:
+        {
+            timeMs_t elapsed = cmp32(millis(), gov.pulseStartTime);
+            uint8_t currentPulse = elapsed / (gov.pulseOnTime + gov.pulseOffTime);
+            timeMs_t pulseTime = elapsed % (gov.pulseOnTime + gov.pulseOffTime);
+
+            if (currentPulse >= gov.pulseCount) {
+                gov.throttleOutput = 0;
+                gov.throttleSlew = 0;
+                govChangeState(GOV_STATE_THROTTLE_IDLE);
+            }
+            else if (pulseTime < gov.pulseOnTime) {
+                gov.throttleOutput = gov.pulseThrottle;
+                gov.throttleSlew = gov.pulseThrottle;
+            }
+            else {
+                gov.throttleOutput = 0;
+                gov.throttleSlew = 0;
+            }
+            gov.targetHeadSpeed = gov.currentHeadSpeed;
+            break;
+        }
         case GOV_STATE_SPOOLUP:
             govSpoolupControl(gov.minSpoolupThrottle, gov.maxSpoolupThrottle, gov.throttleSpoolupRate);
             break;
@@ -1108,12 +1154,24 @@ static void govUpdateGovernedState(void)
 
             // Throttle is IDLE, follow with a limited startup rate
             //  -- If NO throttle, move to THROTTLE_OFF
+            //  -- if pulse start enabled and not done, move to PULSE_START
             //  -- if throttle > handover and stable RPM, move to SPOOLUP
             case GOV_STATE_THROTTLE_IDLE:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
+                else if (gov.pulseStartEnabled && !gov.pulseStartDone && gov.throttleInput > gov.handoverThrottle) {
+                    gov.pulseStartDone = true;
+                    gov.pulseStartTime = millis();
+                    govChangeState(GOV_STATE_PULSE_START);
+                }
                 else if (gov.throttleInput > gov.handoverThrottle && gov.motorRPMGood)
                     govChangeState(GOV_STATE_SPOOLUP);
+                break;
+
+            // Pulse start state - controlled by throttle update
+            case GOV_STATE_PULSE_START:
+                if (gov.throttleInputOff)
+                    govChangeState(GOV_STATE_THROTTLE_OFF);
                 break;
 
             // Throttle is moved from high to off. If it is a mistake, give a chance to recover
@@ -1654,6 +1712,12 @@ void INIT_CODE governorInit(const pidProfile_t *pidProfile)
             gov.autoThrottle = governorConfig()->gov_auto_throttle / 1000.0f;
 
             gov.handoverThrottle = governorConfig()->gov_handover_throttle / 100.0f;
+
+            gov.pulseStartEnabled = (governorConfig()->gov_pulse_enable != 0);
+            gov.pulseThrottle = governorConfig()->gov_pulse_throttle / 100.0f;
+            gov.pulseCount = governorConfig()->gov_pulse_count;
+            gov.pulseOnTime = governorConfig()->gov_pulse_on_time * 10;
+            gov.pulseOffTime = governorConfig()->gov_pulse_off_time * 10;
 
             for (int i=0; i<GOV_THROTTLE_CURVE_POINTS; i++)
                 gov.throttleCurve[i] = governorConfig()->gov_bypass_throttle[i] / 200.0f;
