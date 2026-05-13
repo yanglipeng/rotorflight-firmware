@@ -46,6 +46,7 @@
 #include "drivers/vtx_common.h"
 #include "drivers/sbus_output.h"
 #include "drivers/fbus_master.h"
+#include "drivers/fbus_sensor.h"
 
 #include "config/config.h"
 #include "fc/core.h"
@@ -173,7 +174,7 @@ typedef enum {
 
 static rxState_e rxState = RX_STATE_CHECK;
 
-bool taskUpdateRxMainInProgress()
+bool taskUpdateRxMainInProgress(void)
 {
     return (rxState != RX_STATE_CHECK);
 }
@@ -302,6 +303,9 @@ static void taskTelemetry(timeUs_t currentTimeUs)
 static void taskSportMaster(timeUs_t currentTimeUs)
 {
     handleSportMaster(currentTimeUs);
+#ifndef USE_FBUS_MASTER
+    fbusSensorUpdate(currentTimeUs);
+#endif
 }
 #endif
 
@@ -610,4 +614,3 @@ void tasksInit(void)
 #endif
 
 }
-
