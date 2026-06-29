@@ -226,6 +226,8 @@ typedef struct {
     float           throttleRecoveryRate;
     float           throttleTrackingRate;
     float           throttleSpooldownRate;
+    // First spoolup hold: wait 5s at handover before allowing SPOOLUP
+    bool            firstSpoolupHold;     // hold active flag
 
 } govData_t;
 
@@ -394,11 +396,16 @@ static inline bool isAutorotation(void)
 static void govChangeState(govState_e newState)
 {
     if (gov.state != newState) {
+        const govState_e oldState = gov.state;
         gov.state = newState;
         gov.stateEntryTime = millis();
         gov.stateResetReq = true;
         gov.pidSpoolupActive = false;
         gov.bypassActive = false;
+
+        // Activate first spoolup hold when entering IDLE from OFF
+        gov.firstSpoolupHold = (newState == GOV_STATE_THROTTLE_IDLE
+                                && oldState == GOV_STATE_THROTTLE_OFF);
     }
 }
 
@@ -750,6 +757,11 @@ static void govUpdateDirectState(void)
             case GOV_STATE_THROTTLE_IDLE:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
+                else if (gov.firstSpoolupHold) {
+                    // Hold at handover throttle for 5s on first spoolup
+                    if (govStateTime() > 5000)
+                        gov.firstSpoolupHold = false;
+                }
                 else if (gov.throttleInput > gov.handoverThrottle)
                     govChangeState(GOV_STATE_SPOOLUP);
                 break;
