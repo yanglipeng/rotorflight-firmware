@@ -226,9 +226,9 @@ typedef struct {
     float           throttleRecoveryRate;
     float           throttleTrackingRate;
     float           throttleSpooldownRate;
-    // First RPM hold: freeze throttle for 5s when first RPM detected from stopped
-    bool            firstRPMHoldActive;
-    timeMs_t        firstRPMHoldTime;
+    // First startup slow ramp: hold in IDLE for 8s gentle spin-up
+    bool            firstStartSlow;
+    float           throttleStartupSlowRate;
 
 } govData_t;
 
@@ -397,11 +397,19 @@ static inline bool isAutorotation(void)
 static void govChangeState(govState_e newState)
 {
     if (gov.state != newState) {
+        const govState_e oldState = gov.state;
         gov.state = newState;
         gov.stateEntryTime = millis();
         gov.stateResetReq = true;
         gov.pidSpoolupActive = false;
         gov.bypassActive = false;
+
+        // Activate slow-start ramp when entering IDLE from OFF
+        gov.firstStartSlow = (newState == GOV_STATE_THROTTLE_IDLE
+                              && oldState == GOV_STATE_THROTTLE_OFF);
+        // Reset when disarmed / fully stopped
+        if (newState == GOV_STATE_THROTTLE_OFF)
+            gov.firstStartSlow = false;
     }
 }
 
@@ -597,15 +605,6 @@ static void govDataUpdate(void)
     if (noErrors && motorRPM > 0 && gov.fullHeadSpeedRatio > GOV_HS_DETECT_RATIO) {
         if (!gov.motorRPMDetectTime) {
             gov.motorRPMDetectTime = millis();
-            // First RPM from stopped - activate throttle freeze for 5s
-            // (excludes recovery/bailout/autorotation states)
-            if (!gov.firstRPMHoldActive
-                && gov.state != GOV_STATE_RECOVERY
-                && gov.state != GOV_STATE_BAILOUT
-                && gov.state != GOV_STATE_AUTOROTATION) {
-                gov.firstRPMHoldActive = true;
-                gov.firstRPMHoldTime = millis();
-            }
         }
     }
     else {
@@ -708,31 +707,16 @@ static void govUpdateDirectThrottle(void)
         case GOV_STATE_THROTTLE_OFF:
             gov.throttleOutput = 0;
             gov.throttleSlew = 0;
-            gov.firstRPMHoldActive = false;
             break;
         case GOV_STATE_THROTTLE_HOLD:
         case GOV_STATE_THROTTLE_IDLE:
-            // First RPM hold active - freeze throttle for 5s
-            if (gov.firstRPMHoldActive) {
-                if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
-                    gov.firstRPMHoldActive = false;
-                } else {
-                    gov.targetHeadSpeed = gov.currentHeadSpeed;
-                    break;
-                }
-            }
-            govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
+            // First startup: use slow ramp for gentle spin-up
+            if (gov.firstStartSlow)
+                govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupSlowRate, gov.throttleSpooldownRate);
+            else
+                govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
             break;
         case GOV_STATE_SPOOLUP:
-            // First RPM hold active - freeze throttle for 5s
-            if (gov.firstRPMHoldActive) {
-                if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
-                    gov.firstRPMHoldActive = false;
-                } else {
-                    gov.targetHeadSpeed = gov.currentHeadSpeed;
-                    break;
-                }
-            }
             govThrottleSlewControl(gov.minSpoolupThrottle, gov.maxSpoolupThrottle, gov.throttleSpoolupRate, gov.throttleSpooldownRate);
             break;
         case GOV_STATE_ACTIVE:
@@ -778,9 +762,15 @@ static void govUpdateDirectState(void)
             // Throttle is IDLE, follow with a limited ramupup rate.
             //  -- If NO throttle, move to THROTTLE_OFF
             //  -- if throttle > handover, move to SPOOLUP
+            //  -- On first startup from OFF, hold 8s for gentle spin-up
             case GOV_STATE_THROTTLE_IDLE:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
+                else if (gov.firstStartSlow) {
+                    // First startup: gentle spin-up for 8s
+                    if (govStateTime() > 8000)
+                        gov.firstStartSlow = false;
+                }
                 else if (gov.throttleInput > gov.handoverThrottle)
                     govChangeState(GOV_STATE_SPOOLUP);
                 break;
@@ -939,18 +929,8 @@ static void govSpoolupControl(float minThrottle, float maxThrottle, float maxRat
         // Limit value range
         const float throttle = constrainf(gov.throttleInput, minThrottle, maxThrottle);
 
-        // First RPM hold active - freeze throttle for 5s
-        float rate = maxRate;
-        if (gov.firstRPMHoldActive) {
-            if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
-                gov.firstRPMHoldActive = false;
-            } else {
-                rate = 0;
-            }
-        }
-
         // Update output throttle
-        gov.throttleOutput = gov.throttleSlew = slewLimit(gov.throttleSlew, throttle, rate);
+        gov.throttleOutput = gov.throttleSlew = slewLimit(gov.throttleSlew, throttle, maxRate);
 
         // Update headspeed target
         gov.targetHeadSpeed = gov.currentHeadSpeed;
@@ -1087,20 +1067,14 @@ static void govUpdateGovernedThrottle(void)
             gov.targetHeadSpeed = 0;
             gov.throttleOutput = 0;
             gov.throttleSlew = 0;
-            gov.firstRPMHoldActive = false;
             break;
         case GOV_STATE_THROTTLE_HOLD:
         case GOV_STATE_THROTTLE_IDLE:
-            // First RPM hold active - freeze throttle for 5s
-            if (gov.firstRPMHoldActive) {
-                if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
-                    gov.firstRPMHoldActive = false;
-                } else {
-                    gov.targetHeadSpeed = gov.currentHeadSpeed;
-                    break;
-                }
-            }
-            govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
+            // First startup: use slow ramp for gentle spin-up
+            if (gov.firstStartSlow)
+                govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupSlowRate, gov.throttleSpooldownRate);
+            else
+                govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
             break;
         case GOV_STATE_SPOOLUP:
             govSpoolupControl(gov.minSpoolupThrottle, gov.maxSpoolupThrottle, gov.throttleSpoolupRate);
@@ -1160,9 +1134,15 @@ static void govUpdateGovernedState(void)
             // Throttle is IDLE, follow with a limited startup rate
             //  -- If NO throttle, move to THROTTLE_OFF
             //  -- if throttle > handover and stable RPM, move to SPOOLUP
+            //  -- On first startup from OFF, hold 8s for gentle spin-up
             case GOV_STATE_THROTTLE_IDLE:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
+                else if (gov.firstStartSlow) {
+                    // First startup: gentle spin-up for 8s
+                    if (govStateTime() > 8000)
+                        gov.firstStartSlow = false;
+                }
                 else if (gov.throttleInput > gov.handoverThrottle && gov.motorRPMGood)
                     govChangeState(GOV_STATE_SPOOLUP);
                 break;
@@ -1693,6 +1673,7 @@ void INIT_CODE governorInit(const pidProfile_t *pidProfile)
             gov.mainGearRatio = getMainGearRatio();
 
             gov.throttleStartupRate  = govCalcRate(governorConfig()->gov_startup_time, 1, 600);
+            gov.throttleStartupSlowRate = gov.throttleStartupRate / 8.0f;   // 8x slower for first startup
             gov.throttleSpoolupRate  = govCalcRate(governorConfig()->gov_spoolup_time, 1, 600);
             gov.throttleTrackingRate = govCalcRate(governorConfig()->gov_tracking_time, 1, 600);
             gov.throttleRecoveryRate = govCalcRate(governorConfig()->gov_recovery_time, 1, 600);
