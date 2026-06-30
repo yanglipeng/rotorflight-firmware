@@ -226,8 +226,9 @@ typedef struct {
     float           throttleRecoveryRate;
     float           throttleTrackingRate;
     float           throttleSpooldownRate;
-    // First spoolup hold: wait 5s at handover before allowing SPOOLUP
-    bool            firstSpoolupHold;     // hold active flag
+    // First RPM hold: freeze throttle for 5s when first RPM detected from stopped
+    bool            firstRPMHoldActive;
+    timeMs_t        firstRPMHoldTime;
 
 } govData_t;
 
@@ -396,16 +397,11 @@ static inline bool isAutorotation(void)
 static void govChangeState(govState_e newState)
 {
     if (gov.state != newState) {
-        const govState_e oldState = gov.state;
         gov.state = newState;
         gov.stateEntryTime = millis();
         gov.stateResetReq = true;
         gov.pidSpoolupActive = false;
         gov.bypassActive = false;
-
-        // Activate first spoolup hold when entering IDLE from OFF
-        gov.firstSpoolupHold = (newState == GOV_STATE_THROTTLE_IDLE
-                                && oldState == GOV_STATE_THROTTLE_OFF);
     }
 }
 
@@ -601,6 +597,15 @@ static void govDataUpdate(void)
     if (noErrors && motorRPM > 0 && gov.fullHeadSpeedRatio > GOV_HS_DETECT_RATIO) {
         if (!gov.motorRPMDetectTime) {
             gov.motorRPMDetectTime = millis();
+            // First RPM from stopped - activate throttle freeze for 5s
+            // (excludes recovery/bailout/autorotation states)
+            if (!gov.firstRPMHoldActive
+                && gov.state != GOV_STATE_RECOVERY
+                && gov.state != GOV_STATE_BAILOUT
+                && gov.state != GOV_STATE_AUTOROTATION) {
+                gov.firstRPMHoldActive = true;
+                gov.firstRPMHoldTime = millis();
+            }
         }
     }
     else {
@@ -703,12 +708,31 @@ static void govUpdateDirectThrottle(void)
         case GOV_STATE_THROTTLE_OFF:
             gov.throttleOutput = 0;
             gov.throttleSlew = 0;
+            gov.firstRPMHoldActive = false;
             break;
         case GOV_STATE_THROTTLE_HOLD:
         case GOV_STATE_THROTTLE_IDLE:
+            // First RPM hold active - freeze throttle for 5s
+            if (gov.firstRPMHoldActive) {
+                if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
+                    gov.firstRPMHoldActive = false;
+                } else {
+                    gov.targetHeadSpeed = gov.currentHeadSpeed;
+                    break;
+                }
+            }
             govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
             break;
         case GOV_STATE_SPOOLUP:
+            // First RPM hold active - freeze throttle for 5s
+            if (gov.firstRPMHoldActive) {
+                if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
+                    gov.firstRPMHoldActive = false;
+                } else {
+                    gov.targetHeadSpeed = gov.currentHeadSpeed;
+                    break;
+                }
+            }
             govThrottleSlewControl(gov.minSpoolupThrottle, gov.maxSpoolupThrottle, gov.throttleSpoolupRate, gov.throttleSpooldownRate);
             break;
         case GOV_STATE_ACTIVE:
@@ -757,11 +781,6 @@ static void govUpdateDirectState(void)
             case GOV_STATE_THROTTLE_IDLE:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
-                else if (gov.firstSpoolupHold) {
-                    // Hold at handover throttle for 5s on first spoolup
-                    if (govStateTime() > 5000)
-                        gov.firstSpoolupHold = false;
-                }
                 else if (gov.throttleInput > gov.handoverThrottle)
                     govChangeState(GOV_STATE_SPOOLUP);
                 break;
@@ -920,8 +939,18 @@ static void govSpoolupControl(float minThrottle, float maxThrottle, float maxRat
         // Limit value range
         const float throttle = constrainf(gov.throttleInput, minThrottle, maxThrottle);
 
+        // First RPM hold active - freeze throttle for 5s
+        float rate = maxRate;
+        if (gov.firstRPMHoldActive) {
+            if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
+                gov.firstRPMHoldActive = false;
+            } else {
+                rate = 0;
+            }
+        }
+
         // Update output throttle
-        gov.throttleOutput = gov.throttleSlew = slewLimit(gov.throttleSlew, throttle, maxRate);
+        gov.throttleOutput = gov.throttleSlew = slewLimit(gov.throttleSlew, throttle, rate);
 
         // Update headspeed target
         gov.targetHeadSpeed = gov.currentHeadSpeed;
@@ -1058,9 +1087,19 @@ static void govUpdateGovernedThrottle(void)
             gov.targetHeadSpeed = 0;
             gov.throttleOutput = 0;
             gov.throttleSlew = 0;
+            gov.firstRPMHoldActive = false;
             break;
         case GOV_STATE_THROTTLE_HOLD:
         case GOV_STATE_THROTTLE_IDLE:
+            // First RPM hold active - freeze throttle for 5s
+            if (gov.firstRPMHoldActive) {
+                if (cmp32(millis(), gov.firstRPMHoldTime) > 5000) {
+                    gov.firstRPMHoldActive = false;
+                } else {
+                    gov.targetHeadSpeed = gov.currentHeadSpeed;
+                    break;
+                }
+            }
             govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
             break;
         case GOV_STATE_SPOOLUP:
