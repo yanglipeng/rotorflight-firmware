@@ -1,142 +1,87 @@
-# Rotorflight
+# AK700 · Rotorflight 4.6.0（含定速器 / 救机本地修复）
 
-[![Website](https://img.shields.io/badge/Website-rotorflight.org-2ea44f)](https://www.rotorflight.org/)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/FyfMF4RwSA)
-[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+这是我（yanglipeng）的 **AK700 700 级直升机**固件树，基于 Rotorflight 上游提交
+[`be6a67f`](https://github.com/rotorflight/rotorflight-firmware/commit/be6a67f)（`snapshot/4.6.0-20260208`，
+固件版本 **4.6.0**，MSP API **12.9**），**只加了两个本地修复，其余与上游逐字节一致**。
 
-[Rotorflight](https://github.com/rotorflight) is a Flight Control software suite designed for
-single-rotor helicopters. It consists of:
+| 项 | 值 |
+| --- | --- |
+| 机体 | AK700 |
+| 飞控 | FlyDragon V2.2（`board_name FLYDRAGON_V2_2`） |
+| MCU | STM32F722 · 统一目标 `STM32F7X2` · 512 KB flash |
+| 飞机里实际运行的固件 | `4.6.0 Oct 23 2026 / 16:07:29 (norevision)` |
+| 配套地面站 | Rotorflight Configurator 2.3.0-20260208 |
 
-- Rotorflight Flight Controller Firmware (this repository)
-- [Rotorflight Configurator](https://github.com/rotorflight/rotorflight-configurator), for flashing and configuring the flight controller
-- [Rotorflight Blackbox Explorer](https://github.com/rotorflight/rotorflight-blackbox), for analyzing blackbox flight logs
-- [Rotorflight Lua Scripts](https://github.com/rotorflight/rotorflight-lua-scripts), for configuring the flight controller using a transmitter
+> 上游说明文档保留在 [README-upstream.md](README-upstream.md)。
 
-Built on Betaflight 4.3, Rotorflight incorporates numerous advanced features specifically
-tailored for helicopters. It's important to note that Rotorflight does _not_ support multi-rotor
-crafts or airplanes; it's exclusively designed for RC helicopters.
+## 直接下载
 
-This version of Rotorflight is also known as **Rotorflight 2** or **RF2**.
+| 文件 | 说明 |
+| --- | --- |
+| **[`AK700/firmware/AK700_firmware_4.6.0_20261102.hex`](AK700/firmware/AK700_firmware_4.6.0_20261102.hex)** | **最新固件**（由本仓库源码构建，2026-11-02） |
+| [`AK700/firmware/AK700_firmware_4.6.0_20261023.hex`](AK700/firmware/AK700_firmware_4.6.0_20261023.hex) | 飞机里那一版的原样镜像（从飞控 DFU 整片读出） |
+| [`AK700/firmware/AK700_flash_full_512k_20261023.bin`](AK700/firmware/AK700_flash_full_512k_20261023.bin) | 整片 512 KB 备份：固件 + 板级默认 + 参数 + 飞行统计 |
+| [`AK700/config/AK700_cli_restore_20261102.txt`](AK700/config/AK700_cli_restore_20261102.txt) | 全部参数（CLI `diff all`），粘进 CLI 即可恢复 |
 
+两个 hex **功能完全相同**，只差编译日期字符串（22 字节）。详细说明、SHA256、刷写步骤见
+**[AK700/README.md](AK700/README.md)**。
 
-## Information
+## 与上游的差异（只有这两处）
 
-Tutorials, documentation, and flight videos can be found on the [Rotorflight website](https://www.rotorflight.org/).
+**1. `src/main/flight/governor.c` —— 定速器转速信号故障处理**
 
+上游在转速传感器出现单个毛刺时就判故障，会退出闭环甚至切油门；实测中出现过转速瞬时跳变、频繁掉速。
+本修复的做法：
 
-## Features
+- 故障判定去抖 **100 ms**（`GOV_HS_FAULT_DELAY`），单采样毛刺不改变状态、不动油门；
+- `govDataUpdate()` 在滤波前做**合理性闸门**：门限 = `max(0.25 × 当前转速, 0.10 × 设定转速)`，
+  越界样本冻结估计值而不是跟随（正常飞行不触发，0 延迟）；
+- `motorRPMLatch`：本次启动只要测到过一次有效转速，之后信号故障**只保持油门、绝不切油**；
+- FALLBACK 油门改用 `slewUpDownLimit`，进出 fallback 不再台阶；
+- 起转段 `govSlowStartRate()`：油门底部 15% 按 1/4 速率爬升，抑制起转瞬间尾桨反扭；
+- 转速 ≥95% 目标时直接回 ACTIVE（`GOV_HS_RESUME_RATIO`），不绕一圈 RECOVERY。
 
-Rotorflight has many features:
+**2. `src/main/flight/rescue.c` —— 救机总距限幅**
 
-* Many receiver protocols: CRSF, S.BUS, FBUS, F.Port, SRXL2, IBUS, IBUS2, XBUS, EXBUS, GHOST, CPPM
-* Support for various telemetry protocols: CSRF, S.Port, FBUS, HoTT, etc.
-* ESC telemetry protocols: BLHeli32, Hobbywing, Scorpion, Kontronik, Castle, OMP, ZTW, APD, YGE, XDFly, Graupner, FLYROTOR
-* Advanced PID control algorithms for helicopters
-* Stabilisation modes (6D)
-* Rotor speed governor
-* Motorised tail support with Tail Torque Assist (TTA, also known as TALY)
-* Remote configuration and tuning with the transmitter
-  - With knobs / switches assigned to functions
-  - With LUA scripts on EdgeTX, OpenTX and Ethos
-* Extra servo/motor outputs for AUX functions
-* Fully customisable servo/motor mixer
-* Sensors for battery voltage, current, BEC, etc.
-* Advanced gyro filtering
-  - Dynamic RPM based notch filters
-  - Dynamic notch filters based on FFT
-* High-speed Blackbox logging
+`max_collective` 原来只被高度控制器使用，CLIMB 模式的救机总距没有上限；且总距设定值随倾斜角缩放，
+快速旋转时会在满正 / 满负之间摆动。本修复加了硬上限 + 800 units/s 的斜坡限速（`RESCUE_COLL_MAX_RATE`）。
 
-Plus lots of features inherited from Betaflight:
+查看具体改动：
 
-* Configuration profiles for changing various tuning parameters
-* Rates profiles for changing the stick feel and agility
-* Multiple ESC protocols: PWM, DSHOT, Multishot, etc.
-* Multi-color RGB LEDs
+```bash
+git log -1 --stat
+git diff be6a67f HEAD -- src/main/flight/
+```
 
-And much more...
+## 编译
 
+```bash
+git clone https://github.com/yanglipeng/rotorflight-firmware.git
+cd rotorflight-firmware
 
-## Hardware support
+# 上游 Makefile 期望 ARM GCC 9.3.1；本机用 12.2.1，需要放行新警告
+make TARGET=STM32F7X2 \
+     ARM_SDK_DIR=/path/to/xpack-arm-none-eabi-gcc-12.2.1-1.2 \
+     GCC_REQUIRED_VERSION=12.2.1 \
+     EXTRA_FLAGS=-Wno-error
+```
 
-The best hardware for Rotorflight is any Flight Controller especially designed for it.
-See [Rotorflight Flight Controllers](https://rotorflight.org/docs/controllers)
+产物：`obj/rotorflight_4.6.0_STM32F7X2.hex`。
 
-Otherwise, Rotorflight supports all flight controller boards that are supported by Betaflight 4.3,
-assuming that the board has enough suitable I/O pins for connecting all the servos and motors required.
+## 一致性验证
 
-Also, the Betaflight boards are labeled for multi-rotor use - thus the user needs to understand how
-these functions can be used for a different purpose with helicopters. Usually this is just about using
-the motor outputs for servos, but in some cases a more advanced remapping may be needed.
+用本仓库源码 `make clean` 全量重编，与从飞控 DFU 读出的整片 512 KB 镜像逐字节比对：
 
-Rotorflight supports STM32F405, STM32F722, STM32F745 and STM32H743 MCUs from ST.
+| 区域 | 大小 | 差异 |
+| --- | --- | --- |
+| `.isr_vector` | 480 B | 0 |
+| `.pg_registry`（参数组注册表） | 2 156 B | 0 |
+| `.pg_resetdata`（参数默认值） | 848 B | 0 |
+| `.text`（全部代码） | 460 412 B | 22（仅编译日期字符串） |
+| `.data` | 13 068 B | 0 |
 
-The support for lesser MCUs like STM32G474 and STM32F411 is EOL and will be removed soon.
+即：**代码与飞机里运行的固件完全相同，参数布局也完全相同**，两版之间互刷不会重置参数。
 
+## 许可
 
-## Safety
-
-Helicopters can be dangerous. Rotorflight is provided free of charge and without
-any warranty — you use it entirely at your own risk.
-
-- Always remove the main and tail rotor blades before configuring or testing on the bench.
-- Always double check your configuration before flying.
-- Keep a safe distance from the helicopter whenever the battery is connected.
-
-
-## Installation
-
-Download and flash the Rotorflight firmware with the
-[Rotorflight Configurator](https://github.com/rotorflight/rotorflight-configurator/releases).
-
-Flashing the Rotorflight firmware with any other flashing tool is strictly not
-supported, and will not work.
-
-Visit the [website](https://www.rotorflight.org/) for more details on setting up
-and using Rotorflight.
-
-
-## Support
-
-The primary place for support, questions, and discussion is the
-[Rotorflight Discord](https://discord.gg/FyfMF4RwSA). The developers, flight
-controller manufacturers, and many experienced pilots are all active there.
-
-There is also a [Rotorflight Facebook Group](https://www.facebook.com/groups/rotorflight)
-for hanging out with other Rotorflight pilots.
-
-
-## Contributing
-
-Rotorflight is an open-source community project. Anybody can join in and help to make it better by:
-
-* helping other users on [Rotorflight Discord](https://discord.gg/FyfMF4RwSA) or other online forums
-* [reporting](https://github.com/rotorflight?tab=repositories) bugs and issues, and suggesting improvements
-* testing new software versions, new features and fixes; and providing feedback
-* participating in discussions on new features
-* create or update content on the [Website](https://www.rotorflight.org)
-* [contributing](https://www.rotorflight.org/docs/Contributing/intro) to the software development - fixing bugs, implementing new features and improvements
-* [translating](https://www.rotorflight.org/docs/Contributing/intro#translations) Rotorflight Configurator into a new language, or helping to maintain an existing translation
-
-
-## Origins
-
-Rotorflight is software that is **open source** and is available free of charge without warranty.
-
-Rotorflight is forked from [Betaflight](https://github.com/betaflight), which in turn is forked from [Cleanflight](https://github.com/cleanflight).
-Rotorflight borrows ideas and code also from [HeliFlight3D](https://github.com/heliflight3d/), another Betaflight fork for helicopters.
-
-Big thanks to everyone who has contributed along the journey!
-
-
-## License
-
-Rotorflight is free software licensed under the GNU General Public License v3.0 (GPLv3).
-See the [LICENSE](LICENSE) file for the full license text.
-
-
-## Contact
-
-Team Rotorflight can be contacted by email at rotorflightfc@gmail.com.
-
-Please note that this email address is **not** for support. For help and questions,
-please use the [Support](#support) channels above.
+沿用上游 [GPLv3](LICENSE)。Rotorflight 项目：<https://github.com/rotorflight/rotorflight-firmware>

@@ -51,13 +51,44 @@
 #define GOV_HS_DETECT_DELAY             200
 #define GOV_HS_DETECT_RATIO             0.05f
 
+// RPM fault confirmation delay
+// A single bad RPM sample is a sensor glitch, not a reason to touch the throttle.
+// Faults are only accepted after they have been present continuously for this long.
+#define GOV_HS_FAULT_DELAY              100
+
 // RPM glitch ratio
+// The plausibility window follows the *actual* headspeed, not the configured one,
+// so it stays meaningful while the rotor is accelerating or drooping. The floor
+// keeps the window wide enough that a genuine fast transient is never rejected.
 #define GOV_HS_GLITCH_DELTA             0.25f
 #define GOV_HS_GLITCH_LIMIT             2.0f
+#define GOV_HS_GLITCH_MIN               0.10f
 
 // Lost headspeed levels
 #define GOV_HS_INVALID_RATIO            0.01f
 #define GOV_HS_INVALID_THROTTLE         0.10f
+
+// Fallback admission
+// Losing the RPM reading is not by itself a reason to abandon closed loop
+// control: the raw sample can be garbage while the machine is perfectly fine.
+// Fallback is only entered once the *filtered estimate* has actually collapsed,
+// which is what a dead sensor or a stopped rotor looks like.
+#define GOV_HS_FALLBACK_MIN_RATIO       0.50f
+
+// Headspeed recovery
+// Resume PID control without a rampup if the headspeed is this close to target.
+#define GOV_HS_RESUME_RATIO             0.95f
+
+// Maximum throttle step when entering the recovery state
+#define GOV_RECOVERY_MAX_STEP           0.05f
+
+// Spoolup shaping
+// The bottom of the throttle range is crossed at a reduced rate. This is where
+// the motor accelerates hardest and where the tail rotor has the least
+// authority, and on ESCs without a current limited soft start it is also where
+// the start-up itself happens.
+#define GOV_SPOOLUP_SLOW_LIMIT          0.15f
+#define GOV_SPOOLUP_SLOW_RATIO          0.25f
 
 // Nominal battery cell voltage
 #define GOV_NOMINAL_CELL_VOLTAGE        3.70f
@@ -151,12 +182,19 @@ typedef struct {
 
     // RPM Signal Flags
     bool            motorRPMGood;
+    bool            motorRPMLoss;       // Confirmed loss of rotation
+    bool            motorRPMNoise;      // Confirmed implausible RPM reading
+    bool            motorRPMLatch;      // RPM has been valid since the motor was last stopped
 
     // RPM filter & detection
     filter_t        motorRPMFilter;
     float           motorRPMGlitchDelta;
     float           motorRPMGlitchLimit;
+    float           motorRPMGlitchMin;      // Absolute floor of the plausibility window
+    uint32_t        motorRPMGlitchHoldTime; // How long the estimate has been frozen
     uint32_t        motorRPMDetectTime;
+    uint32_t        motorRPMLossTime;
+    uint32_t        motorRPMNoiseTime;
 
     // RPM constant (approx HS at full throttle)
     float           motorRPMK;
@@ -391,6 +429,31 @@ static inline bool isAutorotation(void)
     return gov.useAutorotation && gov.throttleInput >= gov.autoThrottle;
 }
 
+// Fallback admission test.
+//
+// The old check was "the RPM is not good any more", which a single burst of
+// spurious sensor pulses could satisfy. Two things have to be true for giving up
+// on the closed loop to be the lesser evil:
+//
+//   1. There is still a throttle to regulate - if the pilot wants the motor off
+//      the state machine goes to hold instead, and that path is unaffected.
+//   2. The filtered estimate has genuinely collapsed. While it is still credible
+//      the suspect is the raw sample, not the machine, and the right response is
+//      to keep governing on the estimate rather than to stop regulating.
+static bool govAllowFallback(void)
+{
+    // An explicit request from the transmitter is always honoured. This used to
+    // arrive through the noise flag, so without this the switch would stop
+    // working.
+    if (isForcedFallback())
+        return true;
+
+    if (gov.throttleInputOff || gov.throttleInput < gov.handoverThrottle)
+        return false;
+
+    return gov.fullHeadSpeedRatio < GOV_HS_FALLBACK_MIN_RATIO;
+}
+
 static void govChangeState(govState_e newState)
 {
     if (gov.state != newState) {
@@ -399,6 +462,11 @@ static void govChangeState(govState_e newState)
         gov.stateResetReq = true;
         gov.pidSpoolupActive = false;
         gov.bypassActive = false;
+
+        // The motor is stopped, so the headspeed has to be verified again
+        // before the governor can trust it.
+        if (newState == GOV_STATE_THROTTLE_OFF || newState == GOV_STATE_THROTTLE_IDLE)
+            gov.motorRPMLatch = false;
     }
 }
 
@@ -572,8 +640,54 @@ static void govDataUpdate(void)
     // Assume motor[0]
     const float motorRPM = getMotorRawRPMf(0);
 
+    // Reject implausible samples before they can reach the PID.
+    //
+    // The PID error is derived from currentHeadSpeed, so an implausible RPM
+    // reading is not merely a bad display value - it actively commands the
+    // throttle. A burst of spurious pulses from the RPM sensor (the Hobbywing
+    // style pickups around the motor phases see a lot of switching noise) doubles
+    // the measured frequency, and a single such burst has been observed to cut
+    // the throttle by 25% in flight.
+    //
+    // A genuine rotor cannot change speed by a large fraction of its current
+    // speed between two samples, so comparing against the previous *filtered*
+    // value is a pure comparator: it never trips on a real signal, which means it
+    // adds no lag whatsoever. The window scales with the current speed rather
+    // than the configured headspeed, so it stays meaningful while spooling up or
+    // drooping. When it does trip we freeze the estimate instead of following the
+    // bad sample, and leave the filter state untouched so recovery is immediate.
+    //
+    // Up and down are not the same failure.
+    //
+    // A rotor cannot accelerate by a large fraction of its own speed between two
+    // samples: a 1.5x jump in one sample would need three orders of magnitude
+    // more torque than the drivetrain can produce, so an upward jump is always a
+    // sensor artifact and must never be followed, no matter how long it lasts.
+    // Following it after the timeout is exactly what fed a false overspeed into
+    // the PID and made the governor pull the throttle down.
+    //
+    // A downward step can be real - the throttle was cut, the rotor is slowing -
+    // so that case still expires and lets the estimate follow, which keeps a
+    // genuinely dead sensor from being masked forever.
+    const float prevFilteredRPM = gov.currentHeadSpeed / gov.mainGearRatio;
+    const bool haveEstimate = gov.fullHeadSpeedRatio > GOV_HS_DETECT_RATIO;
+    const float rpmWindow = fmaxf(GOV_HS_GLITCH_DELTA * prevFilteredRPM, gov.motorRPMGlitchMin);
+    const bool rpmTooHigh = haveEstimate &&
+        (motorRPM > prevFilteredRPM + rpmWindow || motorRPM > gov.motorRPMGlitchLimit);
+    const bool rpmTooLow = haveEstimate && motorRPM < prevFilteredRPM - rpmWindow;
+    const bool sampleGlitch = rpmTooHigh || rpmTooLow;
+
+    gov.motorRPMGlitchHoldTime = sampleGlitch
+        ? (gov.motorRPMGlitchHoldTime ? gov.motorRPMGlitchHoldTime : millis()) : 0;
+    const bool holdExpired = gov.motorRPMGlitchHoldTime &&
+        cmp32(millis(), gov.motorRPMGlitchHoldTime) > GOV_HS_FAULT_DELAY;
+
     // RPM signal is noisy - filtering is required
-    const float filteredRPM = filterApply(&gov.motorRPMFilter, motorRPM);
+    float filteredRPM;
+    if (sampleGlitch && (rpmTooHigh || !holdExpired))
+        filteredRPM = prevFilteredRPM;              // freeze, do not touch the filter
+    else
+        filteredRPM = filterApply(&gov.motorRPMFilter, motorRPM);
 
     // Calculate headspeed from filtered motor speed
     gov.currentHeadSpeed = filteredRPM * gov.mainGearRatio;
@@ -587,11 +701,30 @@ static void govDataUpdate(void)
     // Detect RPM glitches
     const bool rpmGlitch = (fabsf(motorRPM - filteredRPM) > gov.motorRPMGlitchDelta || motorRPM > gov.motorRPMGlitchLimit);
 
+    // Faults are debounced. A single bad sample is a sensor glitch, not a fault,
+    // so it must never change the state or the throttle. Any clean sample in
+    // between restarts the timer.
+    //
+    // Samples the plausibility gate above already rejected must not accumulate
+    // fault time. Doing so defeated the gate completely: the freeze protected the
+    // estimate for exactly as long as it took the noise timer to expire, and then
+    // the state machine gave up on a signal that had never stopped being good.
+    gov.motorRPMLossTime  = (rpmError  && !sampleGlitch) ?
+        (gov.motorRPMLossTime  ? gov.motorRPMLossTime  : millis()) : 0;
+    gov.motorRPMNoiseTime = (rpmGlitch && !sampleGlitch) ?
+        (gov.motorRPMNoiseTime ? gov.motorRPMNoiseTime : millis()) : 0;
+
+    gov.motorRPMLoss  = gov.motorRPMLossTime  && (cmp32(millis(), gov.motorRPMLossTime)  > GOV_HS_FAULT_DELAY);
+    gov.motorRPMNoise = gov.motorRPMNoiseTime && (cmp32(millis(), gov.motorRPMNoiseTime) > GOV_HS_FAULT_DELAY);
+
     // Error cases
-    const bool noErrors = !rpmError && !rpmGlitch && !isForcedFallback();
+    const bool noErrors = !gov.motorRPMLoss && !gov.motorRPMNoise && !isForcedFallback();
 
     // Evaluate RPM signal quality
-    if (noErrors && motorRPM > 0 && gov.fullHeadSpeedRatio > GOV_HS_DETECT_RATIO) {
+    // The debounced fault flags above are the only authority here. Checking the
+    // raw sample would make a single zero reading look different from a single
+    // spike, and a one-sample dropout would still drop the governor.
+    if (noErrors && gov.fullHeadSpeedRatio > GOV_HS_DETECT_RATIO) {
         if (!gov.motorRPMDetectTime) {
             gov.motorRPMDetectTime = millis();
         }
@@ -604,6 +737,11 @@ static void govDataUpdate(void)
 
     // Headspeed is present if RPM is stable long enough
     gov.motorRPMGood = (gov.motorRPMDetectTime && cmp32(millis(),gov.motorRPMDetectTime) > GOV_HS_DETECT_DELAY);
+
+    // Remember that the headspeed has been verified. After that a signal fault
+    // may hold the throttle, but it must never cut the power.
+    if (gov.motorRPMGood)
+        gov.motorRPMLatch = true;
 
     // Calculate request ratio (HS or throttle)
     if (gov.govMode == GOV_MODE_DIRECT)
@@ -872,6 +1010,22 @@ static void govUpdateDirectState(void)
  **
  ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** **/
 
+/*
+ * Spoolup shaping.
+ *
+ * The bottom of the throttle range is where the motor accelerates hardest and
+ * where the tail rotor has the least authority, so it is crossed at a reduced
+ * rate. This keeps the governor from stacking its own acceleration on top of
+ * whatever the ESC does when the motor starts turning.
+ *
+ * The rate only depends on the current output, so there is no state and no
+ * timer involved: the spoolup can never stall because of this.
+ */
+static float govSlowStartRate(float rate)
+{
+    return (gov.throttleSlew < GOV_SPOOLUP_SLOW_LIMIT) ? rate * GOV_SPOOLUP_SLOW_RATIO : rate;
+}
+
 static void govSpoolupControl(float minThrottle, float maxThrottle, float maxRate)
 {
     if (gov.pidSpoolupActive)
@@ -908,8 +1062,8 @@ static void govSpoolupControl(float minThrottle, float maxThrottle, float maxRat
         // Limit value range
         const float throttle = constrainf(gov.throttleInput, minThrottle, maxThrottle);
 
-        // Update output throttle
-        gov.throttleOutput = gov.throttleSlew = slewLimit(gov.throttleSlew, throttle, maxRate);
+        // Update output throttle, slowly through the bottom of the range
+        gov.throttleOutput = gov.throttleSlew = slewLimit(gov.throttleSlew, throttle, govSlowStartRate(maxRate));
 
         // Update headspeed target
         gov.targetHeadSpeed = gov.currentHeadSpeed;
@@ -946,6 +1100,14 @@ static void govPIDControl(float minThrottle, float maxThrottle, float maxRate)
         // Expected PID output
         const float pidTarget = gov.throttleOutput / gov.voltageCompGain;
 
+        // P and D carry no meaning across a state change, and a stale P is
+        // actively harmful: leaving fallback while the RPM reading was still
+        // wrong handed the resync a P of -0.21, which was then cancelled by
+        // pushing the integrator to full scale, and the throttle stepped 13
+        // points in one sample. Clearing them first makes the resync produce
+        // exactly the throttle that was already being commanded.
+        gov.P = gov.D = 0;
+
         // Adjust I to prevent throttle jumps
         gov.I = pidTarget - (gov.P + gov.D + gov.F);
 
@@ -976,22 +1138,23 @@ static void govPIDControl(float minThrottle, float maxThrottle, float maxRate)
     govMotorConstantUpdate();
 }
 
-static void govFallbackControl(float minThrottle, float maxThrottle, float __unused maxRate)
+static void govFallbackControl(float minThrottle, float maxThrottle, float maxRate)
 {
-    // Precomp enabled in fallback
-    if (gov.useFallbackPrecomp)
-        gov.F = constrainf(gov.F, gov.minF, gov.maxF);
-    else
-        gov.F = 0;
+    // Hold the throttle that was being commanded when the RPM estimate stopped
+    // being trustworthy.
+    //
+    // This used to output I + F, i.e. it silently threw the P term away. On entry
+    // that is a throttle step downwards in the exact moment the machine needs
+    // power, and on the way out the integrator resync plus a stale P produced a
+    // 13 percentage point jump in a single sample. Freezing the output makes both
+    // transitions step free, which is what the slew below already promises.
+    gov.pidSum = gov.throttleOutput;
 
-    // Fallback "PID sum"
-    gov.pidSum = gov.I + gov.F;
+    const float throttle = constrainf(gov.throttleOutput * gov.fallbackRatio, minThrottle, maxThrottle);
 
-    // Generate throttle signal
-    const float throttle = gov.pidSum * gov.voltageCompGain * gov.fallbackRatio;
-
-    // Limit value range
-    gov.throttleOutput = gov.throttleSlew = constrainf(throttle, minThrottle, maxThrottle);
+    // Never jump. The throttle is slewed, so that entering or leaving the
+    // fallback state cannot change the headspeed abruptly.
+    gov.throttleOutput = gov.throttleSlew = slewUpDownLimit(gov.throttleSlew, throttle, maxRate, gov.throttleSpooldownRate);
 }
 
 static void govRecoveryInit(void)
@@ -1004,7 +1167,13 @@ static void govRecoveryInit(void)
         // Headspeed is still reasonably high. Motor constant has been acquired.
         //  => calculate estimated throttle for the target headspeed
         if (gov.motorRPMGood && gov.fullHeadSpeedRatio > 0.2f && gov.motorRPMK > gov.fullHeadSpeed) {
-            gov.throttleOutput = gov.throttleSlew = fminf(gov.targetHeadSpeed / gov.motorRPMK, gov.requestRatio);
+            const float estimate = fminf(gov.targetHeadSpeed / gov.motorRPMK, gov.requestRatio);
+
+            // Never step the throttle. The estimate is only a starting point for
+            // the rampup, so limit it to a small change from the current output.
+            gov.throttleOutput = gov.throttleSlew = constrainf(estimate,
+                    gov.throttleSlew - GOV_RECOVERY_MAX_STEP,
+                    gov.throttleSlew + GOV_RECOVERY_MAX_STEP);
         }
     }
 }
@@ -1049,7 +1218,10 @@ static void govUpdateGovernedThrottle(void)
             break;
         case GOV_STATE_THROTTLE_HOLD:
         case GOV_STATE_THROTTLE_IDLE:
-            govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle, gov.throttleStartupRate, gov.throttleSpooldownRate);
+            // The motor starts turning in this state. The ESC decides how it
+            // does that, but the throttle is brought up slowly underneath it.
+            govThrottleSlewControl(gov.idleThrottle, gov.handoverThrottle,
+                                   govSlowStartRate(gov.throttleStartupRate), gov.throttleSpooldownRate);
             break;
         case GOV_STATE_SPOOLUP:
             govSpoolupControl(gov.minSpoolupThrottle, gov.maxSpoolupThrottle, gov.throttleSpoolupRate);
@@ -1120,7 +1292,7 @@ static void govUpdateGovernedState(void)
             //  -- When throttle returns high and motor runs, move to RECOVERY
             //  -- When timer expires, move to OFF/IDLE
             case GOV_STATE_THROTTLE_HOLD:
-                if (gov.throttleInput > gov.handoverThrottle && gov.motorRPMGood)
+                if (gov.throttleInput > gov.handoverThrottle && (gov.motorRPMGood || gov.motorRPMLatch))
                     govEnterRecoveryState();
                 else if (govStateTime() > gov.throttleHoldTimeout) {
                     if (gov.throttleInputOff)
@@ -1135,13 +1307,13 @@ static void govUpdateGovernedState(void)
             //  -- Once 99% headspeed reached, move to ACTIVE
             //  -- If throttle reaches 95% before headspeed target, also move to ACTIVE
             //  -- If throttle < handover, move back to IDLE
-            //  -- If no headspeed detected, move to IDLE
+            //  -- If no headspeed was ever detected, move to IDLE
             case GOV_STATE_SPOOLUP:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
                 else if (gov.throttleInput < gov.handoverThrottle)
                     govChangeState(GOV_STATE_THROTTLE_IDLE);
-                else if (!gov.motorRPMGood)
+                else if (!gov.motorRPMGood && !gov.motorRPMLatch)
                     govChangeState(GOV_STATE_THROTTLE_IDLE);
                 else if (gov.currentHeadSpeed > gov.requestedHeadSpeed * 0.99f || gov.throttleOutput > gov.maxSpoolupThrottle * 0.95f)
                     govChangeState(GOV_STATE_ACTIVE);
@@ -1160,14 +1332,15 @@ static void govUpdateGovernedState(void)
                     else
                         govChangeState(GOV_STATE_THROTTLE_HOLD);
                 }
-                else if (!gov.motorRPMGood)
+                else if (!gov.motorRPMGood && govAllowFallback())
                     govChangeState(GOV_STATE_FALLBACK);
                 break;
 
-            // Fallback: No headspeed signal. Use curves.
+            // Fallback: No headspeed signal. Hold the throttle.
             //  -- If NO throttle, move to HOLD
             //  -- If throttle below handover, change state
-            //  -- If headspeed recovers, move to RECOVERY
+            //  -- If headspeed recovers at target, move to ACTIVE
+            //  -- If headspeed recovers below target, move to RECOVERY
             case GOV_STATE_FALLBACK:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_HOLD);
@@ -1177,13 +1350,22 @@ static void govUpdateGovernedState(void)
                     else
                         govChangeState(GOV_STATE_THROTTLE_HOLD);
                 }
-                else if (gov.motorRPMGood)
-                    govEnterRecoveryState();
+                else if (gov.motorRPMGood) {
+                    if (gov.currentHeadSpeed > gov.requestedHeadSpeed * GOV_HS_RESUME_RATIO) {
+                        // Headspeed is still on target. Resume the PID control
+                        // directly; the state change re-syncs the integrator, so
+                        // the throttle does not step.
+                        govChangeState(GOV_STATE_ACTIVE);
+                    }
+                    else {
+                        govEnterRecoveryState();
+                    }
+                }
                 break;
 
             // Ramp up throttle until target headspeed is reached, with fast(er) ramp up.
             //  -- If NO throttle, move to THROTTLE_HOLD
-            //  -- If no headspeed detected, move to IDLE
+            //  -- If no headspeed was ever detected, move to IDLE
             //  -- If throttle reaches 95%, move to ACTIVE
             //  -- Once 99% headspeed reached, move to ACTIVE
             case GOV_STATE_RECOVERY:
@@ -1191,7 +1373,7 @@ static void govUpdateGovernedState(void)
                     govChangeState(GOV_STATE_THROTTLE_HOLD);
                 else if (gov.throttleInput < gov.handoverThrottle)
                     govChangeState(GOV_STATE_THROTTLE_IDLE);
-                else if (!gov.motorRPMGood)
+                else if (!gov.motorRPMGood && !gov.motorRPMLatch)
                     govChangeState(GOV_STATE_THROTTLE_IDLE);
                 else if (gov.currentHeadSpeed > gov.requestedHeadSpeed * 0.99f || gov.throttleOutput > gov.maxSpoolupThrottle * 0.95f)
                     govChangeState(GOV_STATE_ACTIVE);
@@ -1204,7 +1386,7 @@ static void govUpdateGovernedState(void)
             case GOV_STATE_AUTOROTATION:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
-                else if (gov.throttleInput > gov.handoverThrottle && gov.motorRPMGood)
+                else if (gov.throttleInput > gov.handoverThrottle && (gov.motorRPMGood || gov.motorRPMLatch))
                     govEnterBailoutState();
                 else if (!isAutorotation())
                     govChangeState(GOV_STATE_THROTTLE_IDLE);
@@ -1223,7 +1405,7 @@ static void govUpdateGovernedState(void)
                     govChangeState(GOV_STATE_THROTTLE_HOLD);
                 else if (gov.throttleInput < gov.handoverThrottle)
                     govChangeState(GOV_STATE_AUTOROTATION);
-                else if (!gov.motorRPMGood)
+                else if (!gov.motorRPMGood && !gov.motorRPMLatch)
                     govChangeState(GOV_STATE_AUTOROTATION);
                 else if (gov.currentHeadSpeed > gov.requestedHeadSpeed * 0.99f || gov.throttleOutput > gov.maxSpoolupThrottle * 0.95f)
                     govChangeState(GOV_STATE_ACTIVE);
@@ -1236,7 +1418,7 @@ static void govUpdateGovernedState(void)
             case GOV_STATE_BYPASS:
                 if (gov.throttleInputOff)
                     govChangeState(GOV_STATE_THROTTLE_OFF);
-                else if (gov.throttleInput > gov.handoverThrottle && gov.motorRPMGood)
+                else if (gov.throttleInput > gov.handoverThrottle && (gov.motorRPMGood || gov.motorRPMLatch))
                     govEnterRecoveryState();
                 else
                     govChangeState(GOV_STATE_THROTTLE_IDLE);
@@ -1595,6 +1777,7 @@ void INIT_CODE governorInitProfile(const pidProfile_t *pidProfile)
 
         gov.motorRPMGlitchDelta = (gov.fullHeadSpeed / gov.mainGearRatio) * GOV_HS_GLITCH_DELTA;
         gov.motorRPMGlitchLimit = (gov.fullHeadSpeed / gov.mainGearRatio) * GOV_HS_GLITCH_LIMIT;
+        gov.motorRPMGlitchMin   = (gov.fullHeadSpeed / gov.mainGearRatio) * GOV_HS_GLITCH_MIN;
 
         govInitTTA(pidProfile);
     }
@@ -1664,6 +1847,7 @@ void INIT_CODE governorInit(const pidProfile_t *pidProfile)
 
             lowpassFilterInit(&gov.motorVoltageFilter, LPF_PT2, governorConfig()->gov_pwr_filter, gyro.targetRateHz, 0);
             lowpassFilterInit(&gov.motorRPMFilter, LPF_PT2, governorConfig()->gov_rpm_filter, gyro.targetRateHz, 0);
+            gov.motorRPMGlitchHoldTime = 0;
             lowpassFilterInit(&gov.ttaFilter, LPF_PT2, governorConfig()->gov_tta_filter, gyro.targetRateHz, 0);
             lowpassFilterInit(&gov.precompFilter, LPF_PT2, governorConfig()->gov_ff_filter, gyro.targetRateHz, 0);
 

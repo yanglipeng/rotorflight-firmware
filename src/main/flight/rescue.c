@@ -47,6 +47,14 @@
 
 #define RESCUE_MAX_DECIANGLE  450
 
+// Maximum rate at which the rescue collective setpoint may change [units/s].
+// The collective is scaled by the square of the tilt, which swings between +1
+// and -1 within a single piro. Following it exactly would command full positive
+// and full negative collective alternately, pumping the rotor instead of
+// rescuing. Rate limiting also makes the pull-up gentle, which is what the
+// drivetrain wants when the headspeed is already low.
+#define RESCUE_COLL_MAX_RATE  800.0f
+
 typedef struct {
 
     /* Config parameters */
@@ -86,6 +94,7 @@ typedef struct {
     float           maxRate;
     float           maxAccel;
     float           maxColl;
+    float           maxCollAccel;
 
     /* Setpoint output */
 
@@ -221,6 +230,17 @@ static void rescueApplyLimits(void)
         rescue.setpoint[i] = limitf(rescue.setpoint[i], rescue.maxRate);
         rescue.setpoint[i] = slewLimit(rescue.prevSetpoint[i], rescue.setpoint[i], rescue.maxAccel);
     }
+
+    // Collective: hard ceiling first, then a rate limit.
+    //
+    // maxColl was only ever honoured by the altitude controller, so a CLIMB
+    // rescue had no upper bound on the collective at all - a misconfigured
+    // pull-up value could bog the rotor with nothing to stop it. And because the
+    // setpoint is scaled by the tilt, a fast piro would otherwise swing it
+    // between full positive and full negative. Both are fixed here.
+    rescue.setpoint[FD_COLL] = limitf(rescue.setpoint[FD_COLL], rescue.maxColl);
+    rescue.setpoint[FD_COLL] = slewLimit(rescue.prevSetpoint[FD_COLL],
+                                         rescue.setpoint[FD_COLL], rescue.maxCollAccel);
 
     // Previous values
     for (int i=0; i<4; i++) {
@@ -533,6 +553,7 @@ void INIT_CODE rescueInitProfile(const pidProfile_t *pidProfile)
     rescue.maxRate = pidProfile->rescue.max_setpoint_rate;
     rescue.maxAccel = pidProfile->rescue.max_setpoint_accel * pidGetDT() * 10.0f;
     rescue.maxColl = pidProfile->rescue.max_collective;
+    rescue.maxCollAccel = RESCUE_COLL_MAX_RATE * pidGetDT();
 
     rescue.pullUpTime = pidProfile->rescue.pull_up_time * 100;
     rescue.climbTime = pidProfile->rescue.climb_time * 100;
