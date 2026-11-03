@@ -73,6 +73,9 @@ uint16_t getBatteryVoltageSample(void);
 uint16_t getLegacyBatteryVoltage(void);
 uint16_t getBatteryAverageCellVoltage(void);
 
+// Re-apply the cell count and derived thresholds immediately (no battery cycle).
+void batteryRefreshCellCount(void);
+
 bool isBatteryCurrentConfigured(void);
 uint16_t getBatteryCurrent(void);
 uint16_t getBatteryCurrentSample(void);

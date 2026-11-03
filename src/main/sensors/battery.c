@@ -312,20 +312,41 @@ static bool isVoltageFromBat(void)
             || voltage > batteryConfig()->vbatnotpresentcellvoltage * 2;  // USB voltage - 2s or more check
 }
 
-void batteryUpdatePresence(void)
+static void batteryApplyCellCount(void)
 {
-    if ((voltageState == BATTERY_NOT_PRESENT || voltageState == BATTERY_INIT) && isVoltageFromBat() && isVoltageStable()) {
-        // Battery has just been connected - calculate cells, warning voltages and reset state
-        consumptionState = voltageState = BATTERY_OK;
+    if (batteryConfig()->batteryCellCount != 0) {
+        batteryCellCount = batteryConfig()->batteryCellCount;
+    }
+    else {
+        // Auto-detect, two stages.
+        //
+        // Stage 1 uses a narrow, fixed window (3.91-4.20 V/cell) that makes
+        // every series count this aircraft uses mutually exclusive, because
+        //   13 * 4.20 = 54.60 V  <  14 * 3.91 = 54.74 V
+        // A fresh pack (above ~78% charge) is therefore detected unambiguously.
+        //
+        // Stage 2 widens the window to the configured LVC limits for a
+        // discharged pack.  Overlapping counts can only be guessed there,
+        // which is exactly why the radio offers manual confirmation.
+        //
+        // 9 and 11 stay absent on purpose: including them makes a partially
+        // discharged 12S read as 11S.
+#define BATTERY_DETECT_CELL_MIN 391   // 3.91 V/cell
+#define BATTERY_DETECT_CELL_MAX 420   // 4.20 V/cell
+        static const unsigned auto_cells[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14 };
+        unsigned voltage = getBatteryVoltage();
+        bool found = false;
 
-        if (batteryConfig()->batteryCellCount != 0) {
-            batteryCellCount = batteryConfig()->batteryCellCount;
+        batteryCellCount = 1;
+        for (unsigned index = 0; index < ARRAYLEN(auto_cells); index++) {
+            if (voltage >= auto_cells[index] * BATTERY_DETECT_CELL_MIN &&
+                voltage <= auto_cells[index] * BATTERY_DETECT_CELL_MAX) {
+                batteryCellCount = auto_cells[index];
+                found = true;
+                break;
+            }
         }
-        else {
-            static const unsigned auto_cells[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12 };
-            unsigned voltage = getBatteryVoltage();
-            batteryCellCount = 1;
-
+        if (!found) {
             for (unsigned index = 0; index < ARRAYLEN(auto_cells); index++) {
                 if (voltage >= auto_cells[index] * batteryConfig()->vbatmincellvoltage &&
                     voltage <= auto_cells[index] * batteryConfig()->vbatmaxcellvoltage) {
@@ -334,11 +355,20 @@ void batteryUpdatePresence(void)
                 }
             }
         }
+    }
 
-        batteryWarningVoltage = batteryCellCount * batteryConfig()->vbatwarningcellvoltage;
-        batteryCriticalVoltage = batteryCellCount * batteryConfig()->vbatmincellvoltage;
-        batteryWarningHysteresisVoltage = (batteryWarningVoltage > batteryConfig()->vbathysteresis) ? batteryWarningVoltage - batteryConfig()->vbathysteresis : 0;
-        batteryCriticalHysteresisVoltage = (batteryCriticalVoltage > batteryConfig()->vbathysteresis) ? batteryCriticalVoltage - batteryConfig()->vbathysteresis : 0;
+    batteryWarningVoltage = batteryCellCount * batteryConfig()->vbatwarningcellvoltage;
+    batteryCriticalVoltage = batteryCellCount * batteryConfig()->vbatmincellvoltage;
+    batteryWarningHysteresisVoltage = (batteryWarningVoltage > batteryConfig()->vbathysteresis) ? batteryWarningVoltage - batteryConfig()->vbathysteresis : 0;
+    batteryCriticalHysteresisVoltage = (batteryCriticalVoltage > batteryConfig()->vbathysteresis) ? batteryCriticalVoltage - batteryConfig()->vbathysteresis : 0;
+}
+
+void batteryUpdatePresence(void)
+{
+    if ((voltageState == BATTERY_NOT_PRESENT || voltageState == BATTERY_INIT) && isVoltageFromBat() && isVoltageStable()) {
+        // Battery has just been connected - calculate cells, warning voltages and reset state
+        consumptionState = voltageState = BATTERY_OK;
+        batteryApplyCellCount();
         lowVoltageCutoff.percentage = 100;
         lowVoltageCutoff.startTime = 0;
     }
@@ -352,6 +382,18 @@ void batteryUpdatePresence(void)
         batteryWarningHysteresisVoltage = 0;
         batteryCriticalHysteresisVoltage = 0;
     }
+}
+
+// Re-apply the cell count and its derived thresholds immediately, without a
+// battery disconnect/reconnect.  Used by MSP_SET_BATTERY_CONFIG so a battery
+// cell count written from the radio/configurator takes effect at once.
+void batteryRefreshCellCount(void)
+{
+    if (voltageState != BATTERY_OK) {
+        return;
+    }
+
+    batteryApplyCellCount();
 }
 
 static void batteryUpdateVoltageState(void)

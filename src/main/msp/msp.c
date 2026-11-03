@@ -3947,6 +3947,10 @@ static mspResult_e mspCommonProcessInCommand(mspDescriptor_t srcDesc, int16_t cm
             for (int i = 0; i < BATTERY_PROFILE_COUNT; i++)
                 batteryConfigMutable()->batteryCapacity[i] = sbufReadU16(src);
         }
+        // Apply the new cell count (and derived thresholds) immediately, so a
+        // value written from the radio/configurator takes effect without a
+        // battery disconnect/reconnect.
+        batteryRefreshCellCount();
         break;
 
 #ifdef USE_SMARTFUEL
