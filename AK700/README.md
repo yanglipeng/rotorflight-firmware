@@ -18,6 +18,7 @@
 | `firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex` | 1 382 379 B | 2026-11-03 构建（电池刷新 + 13S/14S 检测），保留作对照 / 回退 |
 | `firmware/AK700_firmware_4.6.0_20261102.hex` | 1 382 199 B | 2026-11-02 构建（不含电池刷新改动），保留作对照 / 回退 |
 | `firmware/AK700_firmware_4.6.0_20261023.hex` | 1 182 550 B | **飞机里那份固件的原样镜像**（`Oct 23 2026 / 16:07:29`），从飞控整片读出的 |
+| `firmware/AK700_flash_full_512k_20261105.bin` | 524 288 B | 2026-11-05 刷机前的整片备份（11-03 固件 + 当前参数 + 统计），用于整片还原 |
 | `firmware/AK700_flash_full_512k_20261023.bin` | 524 288 B | 整片 512 KB：固件 + 板级 custom defaults + 参数区 + 飞行统计 |
 | `firmware/AK700_config_sector_16k.bin` | 16 384 B | 参数区单独一份（`0x08004000`–`0x08007FFF`），已更新为 2026-11-03 飞机实际状态 |
 | `config/AK700_cli_diff_all_20261102.txt` | 7 501 B | 飞控 CLI `diff all` 原文（302 行） |
@@ -36,6 +37,7 @@
 7CD521BDA406925BEA425D1B8AC29E7670531A83B9DF6CCDD6DDD13A19C989EA  firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex
 204C8C33A6EFCD4F8062795166CE07B9D8CEF23B34B50F532F4466DC818DF2A0  firmware/AK700_firmware_4.6.0_20261102.hex
 4222CB4545674020D870803C19A2FD70E3C6AC0D92CE010BAE09104BD556B386  firmware/AK700_firmware_4.6.0_20261023.hex
+EE4321E43D849582A4EB8CCDD8B704A3A8F696A03AC8FD13C63660E7BFBB9CDE  firmware/AK700_flash_full_512k_20261105.bin
 B7D6030D80626AC79532CD64CF01B3D5D7413831C56F41FB692C7404FB0E006D  firmware/AK700_flash_full_512k_20261023.bin
 4A63AE7D707D08E04310EE6C9F0F11BED805D7F88FA2DD20B36A58442A50C671  firmware/AK700_config_sector_16k.bin
 133092844103A9B6413225907D0287535C03C12486D0F62F7ADB3B32A85B7FB7  config/AK700_cli_diff_all_20261102.txt
