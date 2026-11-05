@@ -742,6 +742,13 @@ static void govDataUpdate(void)
     // may hold the throttle, but it must never cut the power.
     if (gov.motorRPMGood)
         gov.motorRPMLatch = true;
+    else if (gov.fullHeadSpeedRatio < GOV_HS_DETECT_RATIO) {
+        // The rotor has actually stopped (or never started).  A latch left over
+        // from an earlier run would let the state machine treat a stationary
+        // rotor as spinning, enter RECOVERY, and then apply a meaningful
+        // throttle to a motor that is not turning.
+        gov.motorRPMLatch = false;
+    }
 
     // Calculate request ratio (HS or throttle)
     if (gov.govMode == GOV_MODE_DIRECT)
@@ -1138,6 +1145,75 @@ static void govPIDControl(float minThrottle, float maxThrottle, float maxRate)
     govMotorConstantUpdate();
 }
 
+/**
+ * Recovery / bailout throttle control.
+ *
+ * The throttle is deliberately NOT ramped towards the input throttle any more.
+ * In a governor setup the input curve is normally 100% (the governor is
+ * expected to limit the headspeed), so ramping towards it drove a bailout from
+ * throttle hold up towards full throttle regardless of the selected headspeed -
+ * measured as a 5% overshoot at 2100 rpm, and much worse at lower headspeeds
+ * where the same throttle is far above what the rotor needs.
+ *
+ * Instead the integrator is preloaded with the throttle the requested headspeed
+ * needs.  The I term *is* the learned throttle in this controller, so that is
+ * the natural home for the feedforward: the rotor then accelerates towards an
+ * equilibrium that is exactly the requested headspeed.  That is simultaneously
+ * the fastest acceleration the drivetrain can give (maximum torque surplus at
+ * zero rpm) and impossible to overspeed.  The PID still trims the residual, so
+ * a stale motor constant only costs tracking accuracy, never safety.
+ */
+static void govRecoveryControl(float minThrottle, float maxThrottle, float maxRate)
+{
+    if (gov.throttleInputOff) {
+        gov.targetHeadSpeed = 0;
+        gov.throttleOutput = 0;
+        gov.throttleSlew = 0;
+        return;
+    }
+
+    // Feedforward, applied once when the state is entered.
+    if (gov.stateResetReq) {
+        gov.P = gov.D = 0;
+
+        if (gov.useElectricMotor && gov.motorRPMK > gov.fullHeadSpeed) {
+            // The I term is in the pre-voltage-compensation domain (see the
+            // pidTarget division in govPIDControl), so it must not be scaled
+            // here: the output stage applies the compensation exactly once.
+            gov.I = gov.requestedHeadSpeed / gov.motorRPMK;
+        }
+        else {
+            // Motor constant not learned yet (first flight after boot).
+            gov.I = gov.throttleInput;
+        }
+
+        gov.stateResetReq = false;
+    }
+
+    gov.P = constrainf(gov.P, gov.minP, gov.maxP);
+    gov.I = constrainf(gov.I, gov.minI, gov.maxI);
+    gov.D = constrainf(gov.D, gov.minD, gov.maxD);
+    gov.F = constrainf(gov.F, gov.minF, gov.maxF);
+
+    gov.pidSum = gov.P + gov.I + gov.C + gov.D + gov.F;
+
+    const float throttle = gov.pidSum * gov.voltageCompGain;
+
+    minThrottle = govCalcDynMinThrottle(minThrottle);
+
+    if ((throttle > minThrottle || gov.C > 0) && (throttle < maxThrottle || gov.C < 0))
+        gov.I += gov.C;
+
+    // Single ramp, so the preloaded integrator cannot step the output and a
+    // stopped rotor still gets a gentle start.
+    gov.throttleOutput = gov.throttleSlew = slewUpDownLimit(gov.throttleSlew,
+            constrainf(throttle, minThrottle, maxThrottle), maxRate, maxRate);
+
+    // Ramp the target headspeed; the PID error is the ramp tracking error.
+    gov.targetHeadSpeed = slewLimit(gov.targetHeadSpeed, gov.requestedHeadSpeed,
+                                    govCalcHeadspeedRate(maxRate));
+}
+
 static void govFallbackControl(float minThrottle, float maxThrottle, float maxRate)
 {
     // Hold the throttle that was being commanded when the RPM estimate stopped
@@ -1237,7 +1313,7 @@ static void govUpdateGovernedThrottle(void)
             break;
         case GOV_STATE_RECOVERY:
         case GOV_STATE_BAILOUT:
-            govThrottleSlewControl(gov.minSpoolupThrottle, gov.maxSpoolupThrottle, gov.throttleRecoveryRate, gov.throttleRecoveryRate);
+            govRecoveryControl(gov.minSpoolupThrottle, gov.maxSpoolupThrottle, gov.throttleRecoveryRate);
             break;
         case GOV_STATE_BYPASS:
             govThrottleBypass(gov.throttleCurve, gov.idleThrottle, gov.maxThrottle, gov.throttleRecoveryRate);
