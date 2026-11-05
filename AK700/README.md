@@ -21,8 +21,9 @@
 | `firmware/AK700_flash_full_512k_20261105.bin` | 524 288 B | 2026-11-05 刷机前的整片备份（11-03 固件 + 当前参数 + 统计），用于整片还原 |
 | `firmware/AK700_flash_full_512k_20261023.bin` | 524 288 B | 整片 512 KB：固件 + 板级 custom defaults + 参数区 + 飞行统计 |
 | `firmware/AK700_config_sector_16k.bin` | 16 384 B | 参数区单独一份（`0x08004000`–`0x08007FFF`），已更新为 2026-11-03 飞机实际状态 |
-| `config/AK700_cli_diff_all_20261102.txt` | 7 501 B | 飞控 CLI `diff all` 原文（302 行） |
-| `config/AK700_cli_restore_20261102.txt` | 7 489 B | 干净版（去掉回显行），可整段粘贴进 CLI |
+| `config/AK700_cli_diff_all_20261105.txt` | 10 192 B | 飞控 CLI `diff all` 原文（2026-11-05 新固件导出，422 行） |
+| `config/AK700_cli_restore_20261105.txt` | 10 183 B | 干净版（去掉回显行），可整段粘贴进 CLI 恢复参数 |
+| `config/AK700_cli_diff_all_20261102.txt` | 7 200 B | 旧版（2026-11-02，profile 转速 1150/1600/2100），仅留档 |
 
 > `AK7HUD/` 是配套的**遥控器主屏 widget**（从 KSE4 fork，治自动弹面板 / 地面震动 / 电池节数），
 > 单独说明见 `AK7HUD/README.md`。
@@ -40,6 +41,8 @@
 EE4321E43D849582A4EB8CCDD8B704A3A8F696A03AC8FD13C63660E7BFBB9CDE  firmware/AK700_flash_full_512k_20261105.bin
 B7D6030D80626AC79532CD64CF01B3D5D7413831C56F41FB692C7404FB0E006D  firmware/AK700_flash_full_512k_20261023.bin
 4A63AE7D707D08E04310EE6C9F0F11BED805D7F88FA2DD20B36A58442A50C671  firmware/AK700_config_sector_16k.bin
+71A4B3D772C697D1CAA704554C4F3343A203521EF9203BE2915FFC3EED70C19C  config/AK700_cli_diff_all_20261105.txt
+D21E7729B0E09E29D63D1F503C8B3FEFA3C6EB644A8D1F16F312D8C588EB1E87  config/AK700_cli_restore_20261105.txt
 133092844103A9B6413225907D0287535C03C12486D0F62F7ADB3B32A85B7FB7  config/AK700_cli_diff_all_20261102.txt
 C8584E6F34120BEDCB5B9EE13B1B4506678FED5255CDA784F9EFBF28E2E32DB9  config/AK700_cli_restore_20261102.txt
 ```
