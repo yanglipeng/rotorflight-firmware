@@ -23,9 +23,10 @@
 | `firmware/AK700_flash_full_512k_20261105.bin` | 524 288 B | 2026-11-05 刷机前的整片备份（11-03 固件 + 当日参数 + 统计） |
 | `firmware/AK700_flash_full_512k_20261023.bin` | 524 288 B | 整片 512 KB：固件 + 板级 custom defaults + 参数区 + 飞行统计 |
 | `firmware/AK700_config_sector_16k.bin` | 16 384 B | 参数区单独一份（`0x08004000`–`0x08007FFF`），已更新为 2026-11-06 飞机实际状态 |
-| `config/AK700_cli_diff_all_20261105.txt` | 10 192 B | 飞控 CLI `diff all` 原文（2026-11-05 新固件导出，422 行） |
-| `config/AK700_cli_restore_20261105.txt` | 10 183 B | 干净版（去掉回显行），可整段粘贴进 CLI 恢复参数 |
-| `config/AK700_cli_diff_all_20261102.txt` | 7 200 B | 旧版（2026-11-02，profile 转速 1150/1600/2100），仅留档 |
+| `config/AK700_cli_diff_all_20261106.txt` | 7 433 B | 飞控 CLI `diff all` 原文（2026-11-06 导出，300 行，参数最准） |
+| `config/AK700_cli_restore_20261106.txt` | 7 424 B | 干净版（去掉回显行），可整段粘贴进 CLI 恢复参数 |
+| `config/AK700_cli_diff_all_20261105.txt` | 10 192 B | 2026-11-05 版（含当时的板级设置，因 custom defaults 缺失而出现在 diff 里），仅留档 |
+| `config/AK700_cli_diff_all_20261102.txt` | 7 200 B | 旧版（2026-11-02），仅留档 |
 
 > `AK7HUD/` 是配套的**遥控器主屏 widget**（从 KSE4 fork，治自动弹面板 / 地面震动 / 电池节数），
 > 单独说明见 `AK7HUD/README.md`。
@@ -45,6 +46,8 @@ C37ACC8E81032111149FEF34DBD8D7174258D4E9CDEAFED288A5E22411653370  firmware/AK700
 EE4321E43D849582A4EB8CCDD8B704A3A8F696A03AC8FD13C63660E7BFBB9CDE  firmware/AK700_flash_full_512k_20261105.bin
 B7D6030D80626AC79532CD64CF01B3D5D7413831C56F41FB692C7404FB0E006D  firmware/AK700_flash_full_512k_20261023.bin
 E0392471C158DB83E9D345559CAD6C66116CA37D6FDCB9BEB35F3617B4F6DD9B  firmware/AK700_config_sector_16k.bin
+26243F3BE8DB2623F86A4BE88093A345C40869C4BA2E2055AC447D6E357598E5  config/AK700_cli_diff_all_20261106.txt
+BB47B6A4550D036D78FAB8C3F63927DA96041B7EA57D99838D67181632F23D5E  config/AK700_cli_restore_20261106.txt
 71A4B3D772C697D1CAA704554C4F3343A203521EF9203BE2915FFC3EED70C19C  config/AK700_cli_diff_all_20261105.txt
 D21E7729B0E09E29D63D1F503C8B3FEFA3C6EB644A8D1F16F312D8C588EB1E87  config/AK700_cli_restore_20261105.txt
 133092844103A9B6413225907D0287535C03C12486D0F62F7ADB3B32A85B7FB7  config/AK700_cli_diff_all_20261102.txt
@@ -149,7 +152,7 @@ dfu-util -a 0 -d 0483:df11 -s 0x08000000:0x80000:leave -D AK700_flash_full_512k_
 
 ### 3. 只恢复参数（换固件版本之后）
 
-地面站 → CLI，把 `config/AK700_cli_restore_20261102.txt` 全文粘贴进去。文件结构是标准的：
+地面站 → CLI，把 `config/AK700_cli_restore_20261106.txt` 全文粘贴进去。文件结构是标准的：
 
 ```
 batch start

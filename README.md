@@ -24,7 +24,7 @@
 | [`AK700/firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex`](AK700/firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex) | 2026-11-03 构建（不含定速器恢复修复），回退用 |
 | [`AK700/firmware/AK700_firmware_4.6.0_20261023.hex`](AK700/firmware/AK700_firmware_4.6.0_20261023.hex) | 飞机最初那一版的原样镜像（从飞控 DFU 整片读出） |
 | [`AK700/firmware/AK700_flash_full_512k_20261106.bin`](AK700/firmware/AK700_flash_full_512k_20261106.bin) | 2026-11-06 刷机前的整片 512 KB 备份（固件 + 参数 + 统计） |
-| [`AK700/config/AK700_cli_restore_20261105.txt`](AK700/config/AK700_cli_restore_20261105.txt) | 全部参数（CLI `diff all`），粘进 CLI 即可恢复 |
+| [`AK700/config/AK700_cli_restore_20261106.txt`](AK700/config/AK700_cli_restore_20261106.txt) | 全部参数（CLI `diff all`），粘进 CLI 即可恢复 |
 
 多个 hex 之间只差编译日期串和所带修复的多少；详细说明、SHA256、刷写步骤、逐版本 changelog 见
 **[AK700/README.md](AK700/README.md)**。
