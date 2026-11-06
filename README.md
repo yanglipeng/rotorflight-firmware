@@ -10,7 +10,7 @@
 | 机体 | AK700 |
 | 飞控 | FlyDragon V2.2（`board_name FLYDRAGON_V2_2`） |
 | MCU | STM32F722 · 统一目标 `STM32F7X2` · 512 KB flash |
-| 飞机里实际运行的固件 | `4.6.0 Nov 5 2026 / 21:54:15 (norevision)` |
+| 飞机里实际运行的固件 | `4.6.0 Nov 6 2026 / 15:54:05 (norevision)` |
 | 配套地面站 | Rotorflight Configurator 2.3.0-20260208 |
 
 > 上游说明文档保留在 [README-upstream.md](README-upstream.md)。
@@ -19,10 +19,11 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| **[`AK700/firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex`](AK700/firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex)** | **最新固件**（2026-11-05：定速器恢复安全修复 + 电池刷新 + 13S/14S 检测） |
+| **[`AK700/firmware/AK700_firmware_4.6.0_20261106_battery-apply.hex`](AK700/firmware/AK700_firmware_4.6.0_20261106_battery-apply.hex)** | **最新固件**（2026-11-06：电池节数设错时也能立即生效 + 定速器恢复 + 13S/14S 检测） |
+| [`AK700/firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex`](AK700/firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex) | 2026-11-05 构建（定速器恢复修复），回退用 |
 | [`AK700/firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex`](AK700/firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex) | 2026-11-03 构建（不含定速器恢复修复），回退用 |
 | [`AK700/firmware/AK700_firmware_4.6.0_20261023.hex`](AK700/firmware/AK700_firmware_4.6.0_20261023.hex) | 飞机最初那一版的原样镜像（从飞控 DFU 整片读出） |
-| [`AK700/firmware/AK700_flash_full_512k_20261105.bin`](AK700/firmware/AK700_flash_full_512k_20261105.bin) | 2026-11-05 刷机前的整片 512 KB 备份（固件 + 参数 + 统计） |
+| [`AK700/firmware/AK700_flash_full_512k_20261106.bin`](AK700/firmware/AK700_flash_full_512k_20261106.bin) | 2026-11-06 刷机前的整片 512 KB 备份（固件 + 参数 + 统计） |
 | [`AK700/config/AK700_cli_restore_20261105.txt`](AK700/config/AK700_cli_restore_20261105.txt) | 全部参数（CLI `diff all`），粘进 CLI 即可恢复 |
 
 多个 hex 之间只差编译日期串和所带修复的多少；详细说明、SHA256、刷写步骤、逐版本 changelog 见
@@ -51,6 +52,8 @@
 **3. `src/main/sensors/battery.c` / `src/main/msp/msp.c` —— 电池节数立即生效 + 13S/14S**
 
 - MSP 写入 `battery_cell_count` 后立即重算生效节数 / 告警 / 临界 / 迟滞电压（不再等拔插电池或重启）；
+  **2026-11-06 修正**：原来的提前返回条件是 `voltageState != BATTERY_OK`，节数设错时电压被判为
+  CRITICAL，刷新会被跳过 —— 现在只在「完全没插电池」时跳过；
 - 自动检测表扩到 13/14（**不含 9/11**，否则 12S 半电会被判成 11S），检测窗口改为固定窄窗口
   `3.91–4.20 V/节`（`13×4.20 < 14×3.91`），找不到时回退宽窗口。
 

@@ -14,13 +14,15 @@
 
 | 文件 | 大小 | 说明 |
 | --- | --- | --- |
-| `firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex` | 1 383 549 B | **最新固件（2026-11-05）**：定速器恢复（bailout）安全修复——恢复不再冲向满油门。地面站「固件烧写」直接选它 |
+| `firmware/AK700_firmware_4.6.0_20261106_battery-apply.hex` | 1 383 549 B | **最新固件（2026-11-06）**：修「电池节数设错时不立即生效」的漏洞。地面站「固件烧写」直接选它 |
+| `firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex` | 1 383 549 B | 2026-11-05 构建（定速器恢复安全修复），不含本次电池修复 |
 | `firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex` | 1 382 379 B | 2026-11-03 构建（电池刷新 + 13S/14S 检测），保留作对照 / 回退 |
 | `firmware/AK700_firmware_4.6.0_20261102.hex` | 1 382 199 B | 2026-11-02 构建（不含电池刷新改动），保留作对照 / 回退 |
 | `firmware/AK700_firmware_4.6.0_20261023.hex` | 1 182 550 B | **飞机里那份固件的原样镜像**（`Oct 23 2026 / 16:07:29`），从飞控整片读出的 |
-| `firmware/AK700_flash_full_512k_20261105.bin` | 524 288 B | 2026-11-05 刷机前的整片备份（11-03 固件 + 当前参数 + 统计），用于整片还原 |
+| `firmware/AK700_flash_full_512k_20261106.bin` | 524 288 B | 2026-11-06 刷机前的整片备份（11-05 固件 + 当前参数 + 统计），用于整片还原 |
+| `firmware/AK700_flash_full_512k_20261105.bin` | 524 288 B | 2026-11-05 刷机前的整片备份（11-03 固件 + 当日参数 + 统计） |
 | `firmware/AK700_flash_full_512k_20261023.bin` | 524 288 B | 整片 512 KB：固件 + 板级 custom defaults + 参数区 + 飞行统计 |
-| `firmware/AK700_config_sector_16k.bin` | 16 384 B | 参数区单独一份（`0x08004000`–`0x08007FFF`），已更新为 2026-11-03 飞机实际状态 |
+| `firmware/AK700_config_sector_16k.bin` | 16 384 B | 参数区单独一份（`0x08004000`–`0x08007FFF`），已更新为 2026-11-06 飞机实际状态 |
 | `config/AK700_cli_diff_all_20261105.txt` | 10 192 B | 飞控 CLI `diff all` 原文（2026-11-05 新固件导出，422 行） |
 | `config/AK700_cli_restore_20261105.txt` | 10 183 B | 干净版（去掉回显行），可整段粘贴进 CLI 恢复参数 |
 | `config/AK700_cli_diff_all_20261102.txt` | 7 200 B | 旧版（2026-11-02，profile 转速 1150/1600/2100），仅留档 |
@@ -34,13 +36,15 @@
 ## 二、校验（SHA256）
 
 ```
+C37ACC8E81032111149FEF34DBD8D7174258D4E9CDEAFED288A5E22411653370  firmware/AK700_firmware_4.6.0_20261106_battery-apply.hex
 782C13952B64F314D5C13F6EAA0F62258EBAC92A621F688A0B1BE3FBF739328D  firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex
+5942C41AA65633AA9C9D11BD33A700361698A1C2E170F2C067059E098166217F  firmware/AK700_flash_full_512k_20261106.bin
 7CD521BDA406925BEA425D1B8AC29E7670531A83B9DF6CCDD6DDD13A19C989EA  firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex
 204C8C33A6EFCD4F8062795166CE07B9D8CEF23B34B50F532F4466DC818DF2A0  firmware/AK700_firmware_4.6.0_20261102.hex
 4222CB4545674020D870803C19A2FD70E3C6AC0D92CE010BAE09104BD556B386  firmware/AK700_firmware_4.6.0_20261023.hex
 EE4321E43D849582A4EB8CCDD8B704A3A8F696A03AC8FD13C63660E7BFBB9CDE  firmware/AK700_flash_full_512k_20261105.bin
 B7D6030D80626AC79532CD64CF01B3D5D7413831C56F41FB692C7404FB0E006D  firmware/AK700_flash_full_512k_20261023.bin
-4A63AE7D707D08E04310EE6C9F0F11BED805D7F88FA2DD20B36A58442A50C671  firmware/AK700_config_sector_16k.bin
+E0392471C158DB83E9D345559CAD6C66116CA37D6FDCB9BEB35F3617B4F6DD9B  firmware/AK700_config_sector_16k.bin
 71A4B3D772C697D1CAA704554C4F3343A203521EF9203BE2915FFC3EED70C19C  config/AK700_cli_diff_all_20261105.txt
 D21E7729B0E09E29D63D1F503C8B3FEFA3C6EB644A8D1F16F312D8C588EB1E87  config/AK700_cli_restore_20261105.txt
 133092844103A9B6413225907D0287535C03C12486D0F62F7ADB3B32A85B7FB7  config/AK700_cli_diff_all_20261102.txt
@@ -48,6 +52,23 @@ C8584E6F34120BEDCB5B9EE13B1B4506678FED5255CDA784F9EFBF28E2E32DB9  config/AK700_c
 ```
 
 ## 二之二、版本更新记录
+
+### 2026-11-06：电池节数立即生效（修 11-03 的漏洞）
+
+**问题**：11-03 加的「写入节数立即生效」在**节数设错时失效**。`batteryRefreshCellCount()` 的提前返回条件是
+`voltageState != BATTERY_OK`，而节数设错时（例如 12S 配置插 7S 电池，27 V 远低于 12S 的临界阈值）
+电压状态立刻变成 `BATTERY_CRITICAL` → 刷新被跳过 → **只有重启才生效**。
+
+**修复**（`src/main/sensors/battery.c`，+8/−1）：提前返回条件改为
+`voltageState == BATTERY_NOT_PRESENT`——只有「完全没插电池」才跳过，其余状态（含 WARNING / CRITICAL）
+都立即应用。
+
+**验证**：刷写后回读整片 —— 向量表 0/10240、custom defaults 0/6144、**参数区 0/16384**、主代码 0/489208。
+
+**同日日志侧发现**：
+- 第二、三起落飞的是 **7S 电池**（25.7–29.3 V）。目标 1600 转时稳态油门已 97%、I 项饱和，
+  侧摆推杆时油门打满仍从 1557 掉到 1379 转 —— **7S 带 1600 转动力不够**，建议 7S 只用 1150–1200。
+- 14S @ 2100 转：motor 中位 64%，转速跟踪中位误差 0、p95 65 rpm，健康。
 
 ### 2026-11-05：定速器恢复（bailout）安全修复
 

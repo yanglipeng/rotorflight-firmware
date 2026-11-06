@@ -389,7 +389,14 @@ void batteryUpdatePresence(void)
 // cell count written from the radio/configurator takes effect at once.
 void batteryRefreshCellCount(void)
 {
-    if (voltageState != BATTERY_OK) {
+    // Only refuse to apply when there is no pack at all.  The previous check
+    // required voltageState == BATTERY_OK, but that state also becomes WARNING
+    // or CRITICAL the moment the pack is low - which is exactly when the cell
+    // count is likely to be wrong: a 7S pack on a 12S setting reads as
+    // critically low, so the write was silently dropped and only a reboot
+    // applied it.  The value comes from the config (or from the pack voltage
+    // for auto-detect), so applying it in any state except NOT_PRESENT is safe.
+    if (voltageState == BATTERY_NOT_PRESENT) {
         return;
     }
 
