@@ -64,6 +64,13 @@
 #define GOV_HS_GLITCH_LIMIT             2.0f
 #define GOV_HS_GLITCH_MIN               0.10f
 
+// Headspeed ratio above which the estimate counts as "on the target".
+// Below it the governor is still spinning up: an upward step there is a real
+// spin-up far more often than it is sensor noise (the rpm sensor reads zero
+// below its minimum frequency, then jumps straight to the true speed), so the
+// plausibility gate must debounce and then follow instead of freezing forever.
+#define GOV_HS_TRACKING_RATIO           0.90f
+
 // Lost headspeed levels
 #define GOV_HS_INVALID_RATIO            0.01f
 #define GOV_HS_INVALID_THROTTLE         0.10f
@@ -89,6 +96,23 @@
 // the start-up itself happens.
 #define GOV_SPOOLUP_SLOW_LIMIT          0.15f
 #define GOV_SPOOLUP_SLOW_RATIO          0.25f
+
+// Spool-up feed-forward margin.
+// The spool-up ramp is open loop, so the throttle it aims at is the only thing
+// that bounds the rotor. Aiming at the pilot's input throttle (normally 100%)
+// means a spin-up whose rpm estimate has gone stale keeps opening the throttle
+// with nothing to stop it - on 2026-11-07 the estimate stuck at 59 rpm while the
+// head passed 2425 rpm against a 1150 target. Aiming at the steady-state
+// throttle for the requested headspeed instead is bounded by the motor
+// constant, not by the sensor: if the estimate never comes back the rotor still
+// settles at the target, and this margin only defines the worst case overspeed.
+#define GOV_SPOOLUP_FF_MARGIN           1.10f
+
+// Recovery feed-forward margin. A recovery has to regain speed quickly, so it
+// gets more headroom than the spool-up, but it is still bounded by the motor
+// model rather than by the rpm estimate, and the independent overspeed trip
+// above covers what the bound cannot.
+#define GOV_RECOVERY_FF_MARGIN          1.20f
 
 // Nominal battery cell voltage
 #define GOV_NOMINAL_CELL_VOLTAGE        3.70f
@@ -199,6 +223,18 @@ typedef struct {
     // RPM constant (approx HS at full throttle)
     float           motorRPMK;
     ewma1Filter_t   motorRPMKFilter;
+
+    // Pack independent motor constant: headspeed / (throttle * battery volts).
+    //
+    // motorRPMK above is not usable for anything that has to hold across packs:
+    // it halves when the pack voltage halves (measured on one airframe: 3282 on
+    // 14S, 1613 on 7S - a ratio of 2.035 against a voltage ratio of 2.00), which
+    // is fine for its original use but would make a throttle bound either stop
+    // the rotor reaching its target or stop protecting it at all. Dividing by
+    // the measured pack voltage removes that: the same airframe measures 60.7
+    // and 59.7 rpm per (throttle * volt) on those two packs.
+    float           motorRPMKV;
+    ewma1Filter_t   motorRPMKVFilter;
 
     // Battery voltage
     float           motorVoltage;
@@ -623,6 +659,13 @@ static void govMotorConstantUpdate(void)
             gov.motorRPMK = ewma1FilterApply(&gov.motorRPMKFilter, RPMK);
             DEBUG(GOV_MOTOR, 0, RPMK);
             DEBUG(GOV_MOTOR, 1, gov.motorRPMK);
+
+            // Pack independent form, for anything that has to hold across batteries
+            const float vbat = getBatteryVoltage() / 100.0f;
+            if (vbat > 1.0f) {
+                const float RPMKV = gov.currentHeadSpeed / (gov.throttleOutput * vbat);
+                gov.motorRPMKV = ewma1FilterApply(&gov.motorRPMKVFilter, RPMKV);
+            }
         }
     }
 }
@@ -669,13 +712,26 @@ static void govDataUpdate(void)
     // A downward step can be real - the throttle was cut, the rotor is slowing -
     // so that case still expires and lets the estimate follow, which keeps a
     // genuinely dead sensor from being masked forever.
+    //
+    // There is one upward case that is real, though: the very first spin-up.
+    // The rpm sensor reads zero below its minimum frequency and then jumps
+    // straight to the true speed, so from a standstill the first valid sample is
+    // a large upward step. Freezing the estimate there leaves the governor blind
+    // for as long as the rotor is spinning up, and because the spool-up throttle
+    // is open loop the rotor then runs away (seen on 2026-11-07: estimate stuck
+    // at 59 rpm while the head reached 2425 rpm against a 1150 target). So while
+    // the estimate is still below the target the gate debounces like the
+    // downward case and then follows; only at or above the target, and above the
+    // absolute limit, is an upward step held indefinitely.
     const float prevFilteredRPM = gov.currentHeadSpeed / gov.mainGearRatio;
     const bool haveEstimate = gov.fullHeadSpeedRatio > GOV_HS_DETECT_RATIO;
     const float rpmWindow = fmaxf(GOV_HS_GLITCH_DELTA * prevFilteredRPM, gov.motorRPMGlitchMin);
-    const bool rpmTooHigh = haveEstimate &&
-        (motorRPM > prevFilteredRPM + rpmWindow || motorRPM > gov.motorRPMGlitchLimit);
+    const bool rpmOverLimit = motorRPM > gov.motorRPMGlitchLimit;
+    const bool rpmTooHigh = haveEstimate && (motorRPM > prevFilteredRPM + rpmWindow || rpmOverLimit);
     const bool rpmTooLow = haveEstimate && motorRPM < prevFilteredRPM - rpmWindow;
     const bool sampleGlitch = rpmTooHigh || rpmTooLow;
+    const bool onTarget = gov.currentHeadSpeed >= gov.requestedHeadSpeed * GOV_HS_TRACKING_RATIO;
+    const bool holdUp = rpmOverLimit || (rpmTooHigh && onTarget);
 
     gov.motorRPMGlitchHoldTime = sampleGlitch
         ? (gov.motorRPMGlitchHoldTime ? gov.motorRPMGlitchHoldTime : millis()) : 0;
@@ -684,7 +740,7 @@ static void govDataUpdate(void)
 
     // RPM signal is noisy - filtering is required
     float filteredRPM;
-    if (sampleGlitch && (rpmTooHigh || !holdExpired))
+    if (sampleGlitch && (holdUp || !holdExpired))
         filteredRPM = prevFilteredRPM;              // freeze, do not touch the filter
     else
         filteredRPM = filterApply(&gov.motorRPMFilter, motorRPM);
@@ -1033,6 +1089,44 @@ static float govSlowStartRate(float rate)
     return (gov.throttleSlew < GOV_SPOOLUP_SLOW_LIMIT) ? rate * GOV_SPOOLUP_SLOW_RATIO : rate;
 }
 
+// Throttle the spool-up should aim at.
+//
+// Normally the pilot's throttle curve, but capped by the steady-state throttle
+// for the requested headspeed once the motor constant has been learned. This is
+// what makes the open-loop spool-up self limiting: the cap comes from the motor
+// model, not from the rpm estimate, so it holds even when the estimate is wrong.
+// The very first spin-up after boot has no model yet and falls back to the input
+// throttle; the model is learned as soon as the rotor is up to speed.
+// Throttle that holds a headspeed on the pack that is connected right now.
+//
+// Uses the pack independent motor constant when it has been learned, so the
+// answer follows the battery: the same headspeed needs roughly twice the
+// throttle on a 7S pack that it does on 14S. Falls back to the older
+// voltage dependent constant, and finally to "no bound" if nothing has been
+// learned yet (the first spin-up after boot).
+static float govSteadyThrottle(float headSpeed)
+{
+    const float vbat = getBatteryVoltage() / 100.0f;
+
+    if (gov.motorRPMKV > 0.0f && vbat > 1.0f)
+        return headSpeed / (gov.motorRPMKV * vbat);
+
+    if (gov.motorRPMK > gov.fullHeadSpeed)
+        return headSpeed / gov.motorRPMK;
+
+    return headSpeed;
+}
+
+static float govSpoolupThrottleTarget(void)
+{
+    float target = gov.throttleInput;
+
+    if (gov.useElectricMotor)
+        target = fminf(target, govSteadyThrottle(gov.requestedHeadSpeed) * GOV_SPOOLUP_FF_MARGIN);
+
+    return target;
+}
+
 static void govSpoolupControl(float minThrottle, float maxThrottle, float maxRate)
 {
     if (gov.pidSpoolupActive)
@@ -1067,7 +1161,7 @@ static void govSpoolupControl(float minThrottle, float maxThrottle, float maxRat
     else
     {
         // Limit value range
-        const float throttle = constrainf(gov.throttleInput, minThrottle, maxThrottle);
+        const float throttle = constrainf(govSpoolupThrottleTarget(), minThrottle, maxThrottle);
 
         // Update output throttle, slowly through the bottom of the range
         gov.throttleOutput = gov.throttleSlew = slewLimit(gov.throttleSlew, throttle, govSlowStartRate(maxRate));
@@ -1194,6 +1288,13 @@ static void govRecoveryControl(float minThrottle, float maxThrottle, float maxRa
     gov.I = constrainf(gov.I, gov.minI, gov.maxI);
     gov.D = constrainf(gov.D, gov.minD, gov.maxD);
     gov.F = constrainf(gov.F, gov.minF, gov.maxF);
+
+    // Same bound as the spool-up: a recovery whose rpm estimate has gone stale
+    // must not be able to integrate or P-drive its way to full throttle. The
+    // margin is wider than the spool-up's because a recovery has to regain
+    // speed quickly, and the output still has to be able to accelerate.
+    if (gov.useElectricMotor)
+        maxThrottle = fminf(maxThrottle, govSteadyThrottle(gov.requestedHeadSpeed) * GOV_RECOVERY_FF_MARGIN);
 
     gov.pidSum = gov.P + gov.I + gov.C + gov.D + gov.F;
 
@@ -1689,6 +1790,107 @@ void set_ADJUSTMENT_GOV_YAW_FF(int value)
  **
  ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** ** **/
 
+// Independent overspeed protection.
+//
+// The governor can only reduce power, never brake, so a brief overshoot while
+// the rotor unloads is physics and must not be fought. A *sustained* overspeed
+// is a different thing: it means the control loop is wrong - usually because the
+// rpm estimate went stale - and the governor cannot see it, because the estimate
+// is exactly what is broken. So this check deliberately does not use
+// gov.currentHeadSpeed; it uses the motor-filtered headspeed instead, which is a
+// different filter fed by the same sensor, and it only trips once the headspeed
+// has stayed above the limit for a full second.
+//
+// 2026-11-04: 1900 target, 2435 peak (+28%) for well under a second while the
+// rotor unloaded in a maneuver - must NOT trip.
+// 2026-11-07: 1150 target, 2425 rpm held for ten seconds while the estimate sat
+// at 59 rpm - must trip.
+//
+// Two tiers, both expressed as ratios of the target so they mean the same thing
+// on a 450 as on a 700. The soft tier waits long enough to ignore a maneuver's
+// unload transient; the hard tier does not rely on the machine being slow - a
+// light rotor with a strong motor can pass any given speed very quickly, so far
+// enough over it gets cut promptly whatever the aircraft's dynamics are.
+#define GOV_OVERSPEED_TRIP_RATIO        1.20f
+#define GOV_OVERSPEED_TRIP_DELAY        1000
+#define GOV_OVERSPEED_HARD_RATIO        1.50f
+#define GOV_OVERSPEED_HARD_DELAY        250
+
+// Backstop for the judgement reference below, so that a reading stuck high
+// cannot park the reference above the request indefinitely.
+#define GOV_OVERSPEED_REF_MAX_DELAY     2500
+
+static uint32_t govOverspeedTime;
+static float    govOverspeedRef;
+static uint32_t govOverspeedRefTime;
+
+static void govOverspeedCheck(void)
+{
+    if (!ARMING_FLAG(ARMED) || gov.requestedHeadSpeed <= 0) {
+        govOverspeedTime = 0;
+        govOverspeedRef = 0;
+        govOverspeedRefTime = 0;
+        return;
+    }
+
+    const float headSpeed = getHeadSpeedf();
+    const float requested = gov.requestedHeadSpeed;
+
+    // The reference the limit is compared against.
+    //
+    // The requested headspeed changes instantly when the pilot selects another
+    // idle-up, but the rotor does not: after a commanded reduction it is still
+    // turning at the old speed and needs 0.4-0.7 s to fall inside 1.2x of the new
+    // target (measured 2026-11-08 on this airframe: 1600->1150 709 ms,
+    // 2150->1700 424 ms, 1700->1150 647 ms). Judged against the new target that
+    // interval looks exactly like a runaway, and on every flight of 2026-11-08 it
+    // did: the throttle was cut to zero 250 ms after the down-shift, the
+    // headspeed fell to ~400 rpm and the recovery took 1-2 s.
+    //
+    // So the reference follows the request upwards immediately, but downwards
+    // only once the rotor has actually come down inside 1.2x of it. The
+    // protection stays armed the whole time - it is compared against the old,
+    // higher target, which is still a genuine overspeed - and any change of the
+    // request voids the running timer so that an over-limit accumulated at the
+    // old operating point cannot fire at the new one.
+    if (govOverspeedRef <= 0.0f || requested > govOverspeedRef * 1.01f) {
+        govOverspeedRef = requested;
+        govOverspeedRefTime = millis() ? millis() : 1;
+        govOverspeedTime = 0;
+    }
+    else if (headSpeed <= requested * GOV_OVERSPEED_TRIP_RATIO ||
+             (govOverspeedRefTime && cmp32(millis(), govOverspeedRefTime) > GOV_OVERSPEED_REF_MAX_DELAY)) {
+        govOverspeedRef = requested;
+        govOverspeedRefTime = millis() ? millis() : 1;
+    }
+
+    const float target = fmaxf(govOverspeedRef, requested);
+
+    if (headSpeed <= target * GOV_OVERSPEED_TRIP_RATIO) {
+        govOverspeedTime = 0;
+        return;
+    }
+
+    if (!govOverspeedTime) {
+        govOverspeedTime = millis() ? millis() : 1;
+        return;
+    }
+
+    const int32_t delay = headSpeed > target * GOV_OVERSPEED_HARD_RATIO
+        ? GOV_OVERSPEED_HARD_DELAY : GOV_OVERSPEED_TRIP_DELAY;
+
+    if (cmp32(millis(), govOverspeedTime) <= delay) {
+        return;
+    }
+
+    // Cut the power, and keep the loop from winding straight back up while the
+    // rotor is still over the limit.
+    gov.P = gov.D = gov.C = gov.F = 0;
+    gov.I = 0;
+    gov.pidSum = 0;
+    gov.throttleOutput = gov.throttleSlew = 0;
+}
+
 void governorUpdate(void)
 {
     switch (gov.govMode)
@@ -1706,6 +1908,7 @@ void governorUpdate(void)
         case GOV_MODE_NITRO:
             govDataUpdate();
             govUpdateGovernedState();
+            govOverspeedCheck();
             govDebugUpdate();
 
             break;
@@ -1920,6 +2123,7 @@ void INIT_CODE governorInit(const pidProfile_t *pidProfile)
             difFilterInit(&gov.differentiator, governorConfig()->gov_d_filter / 10.0f, gyro.targetRateHz);
 
             ewma1FilterInit(&gov.motorRPMKFilter, GOV_RPM_K_CUTOFF, gyro.targetRateHz);
+            ewma1FilterInit(&gov.motorRPMKVFilter, GOV_RPM_K_CUTOFF, gyro.targetRateHz);
 
             lowpassFilterInit(&gov.motorVoltageFilter, LPF_PT2, governorConfig()->gov_pwr_filter, gyro.targetRateHz, 0);
             lowpassFilterInit(&gov.motorRPMFilter, LPF_PT2, governorConfig()->gov_rpm_filter, gyro.targetRateHz, 0);
