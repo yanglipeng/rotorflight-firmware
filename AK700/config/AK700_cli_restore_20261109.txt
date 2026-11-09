@@ -1,5 +1,5 @@
 # version
-# Rotorflight / STM32F7X2 (S7X2) 4.6.0 Nov  7 2026 / 19:08:55 (norevision) MSP API: 12.9
+# Rotorflight / STM32F7X2 (S7X2) 4.6.0 Nov  9 2026 / 15:07:22 (norevision) MSP API: 12.9
 
 # start the command batch
 batch start
