@@ -68,6 +68,7 @@ const char * const batteryVoltageSourceNames[VOLTAGE_METER_COUNT] = {
     [VOLTAGE_METER_ADC]     = "ADC",
     [VOLTAGE_METER_ESC]     = "ESC",
     [VOLTAGE_METER_FBUS]    = "FBUS",
+    [VOLTAGE_METER_CRSF]    = "CRSF",
 };
 
 const char * const batteryCurrentSourceNames[CURRENT_METER_COUNT] = {
@@ -75,6 +76,7 @@ const char * const batteryCurrentSourceNames[CURRENT_METER_COUNT] = {
     [CURRENT_METER_ADC]     = "ADC",
     [CURRENT_METER_ESC]     = "ESC",
     [CURRENT_METER_FBUS]    = "FBUS",
+    [CURRENT_METER_CRSF]    = "CRSF",
 };
 
 
@@ -101,6 +103,12 @@ static uint16_t batteryCriticalHysteresisVoltage;
 static batteryState_e batteryState;
 static batteryState_e voltageState;
 static batteryState_e consumptionState;
+
+static uint8_t pendingBatteryProfile;
+static bool batteryProfileChanged;
+// Set once the pilot writes a cell count while disarmed; cleared by a power
+// cycle, by writing 0, or by switching to another battery profile.
+static bool batteryCellCountLocked;
 
 
 /** Access function **/
@@ -241,17 +249,42 @@ uint8_t calculateBatteryPercentageRemaining(void)
     if (batteryCapacity > 0) {
         batteryPercentage = 100 * (batteryCapacity - (int)currentMeter.capacity) / batteryCapacity;
     } else if (batteryCellCount > 0) {
-        batteryPercentage = 100 * ((int)getBatteryAverageCellVoltage() - (int)batteryConfig()->vbatmincellvoltage) /
-            (batteryConfig()->vbatmaxcellvoltage - batteryConfig()->vbatmincellvoltage);
+        batteryPercentage = 100 * ((int)getBatteryAverageCellVoltage() - (int)getBatteryMinCellVoltage()) /
+            (getBatteryMaxCellVoltage() - getBatteryMinCellVoltage());
     }
 
     return constrain(batteryPercentage, 0, 100);
 }
 
+static void applyBatteryProfile(void)
+{
+    batteryConfigMutable()->batteryProfile = pendingBatteryProfile;
+    batteryProfileChanged = false;
+
+    // The cell count taken from the pilot belongs to the profile it was typed
+    // for, so a profile change must hand control back to detection
+    batteryCellCountLocked = false;
+
+    // Force cell count and thresholds to be re-evaluated for the new profile
+    if (voltageState != BATTERY_NOT_PRESENT) {
+        voltageState = BATTERY_INIT;
+    }
+#ifdef USE_SMARTFUEL
+    smartFuelInit();
+#endif
+}
+
 void changeBatteryProfile(uint8_t profileIndex)
 {
-    if (profileIndex < BATTERY_PROFILE_COUNT) {
-        batteryConfigMutable()->batteryProfile = profileIndex;
+    if (profileIndex < BATTERY_PROFILE_COUNT && profileIndex != pendingBatteryProfile) {
+        pendingBatteryProfile = profileIndex;
+        batteryProfileChanged = true;
+        // Switching profiles in flight would run the new cell count and cell
+        // voltages against the alarm thresholds cached for the old profile,
+        // so the change is applied once the model is disarmed
+        if (!ARMING_FLAG(ARMED)) {
+            applyBatteryProfile();
+        }
     }
 }
 
@@ -262,12 +295,72 @@ uint8_t getCurrentBatteryProfileIndex(void)
 
 int get_ADJUSTMENT_BATTERY_PROFILE(void)
 {
-    return getCurrentBatteryProfileIndex() + 1;
+    // Report the requested profile, so that a change made in flight is not
+    // repeatedly re-applied by the adjustment while it is still pending
+    return pendingBatteryProfile + 1;
 }
 
 void set_ADJUSTMENT_BATTERY_PROFILE(int value)
 {
     changeBatteryProfile(value - 1);
+}
+
+uint8_t getBatteryProfileCellCount(void)
+{
+    return batteryConfig()->batteryCellCount[batteryConfig()->batteryProfile];
+}
+
+uint16_t getBatteryMaxCellVoltage(void)
+{
+    return batteryConfig()->vbatmaxcellvoltage[batteryConfig()->batteryProfile];
+}
+
+uint16_t getBatteryMinCellVoltage(void)
+{
+    return batteryConfig()->vbatmincellvoltage[batteryConfig()->batteryProfile];
+}
+
+uint16_t getBatteryFullCellVoltage(void)
+{
+    return batteryConfig()->vbatfullcellvoltage[batteryConfig()->batteryProfile];
+}
+
+uint16_t getBatteryWarningCellVoltage(void)
+{
+    return batteryConfig()->vbatwarningcellvoltage[batteryConfig()->batteryProfile];
+}
+
+void validateAndFixBatteryConfig(void)
+{
+    batteryConfig_t *config = batteryConfigMutable();
+
+    if (config->batteryProfile >= BATTERY_PROFILE_COUNT) {
+        config->batteryProfile = 0;
+    }
+
+    for (int i = 0; i < BATTERY_PROFILE_COUNT; i++) {
+        if (config->batteryCellCount[i] > BATTERY_CELL_COUNT_MAX) {
+            config->batteryCellCount[i] = 0;
+        }
+        if (config->vbatmincellvoltage[i] < VBAT_CELL_VOTAGE_RANGE_MIN ||
+            config->vbatmaxcellvoltage[i] > VBAT_CELL_VOTAGE_RANGE_MAX ||
+            config->vbatmincellvoltage[i] >= config->vbatmaxcellvoltage[i]) {
+            config->vbatmincellvoltage[i] = VBAT_CELL_VOLTAGE_DEFAULT_MIN;
+            config->vbatmaxcellvoltage[i] = VBAT_CELL_VOLTAGE_DEFAULT_MAX;
+        }
+        // The thresholds must be ordered min <= warning <= full <= max, or the
+        // charge level and the warning alarm are evaluated against each other
+        if (config->vbatfullcellvoltage[i] < config->vbatmincellvoltage[i] ||
+            config->vbatfullcellvoltage[i] > config->vbatmaxcellvoltage[i]) {
+            config->vbatfullcellvoltage[i] = constrain(VBAT_CELL_VOLTAGE_DEFAULT_FULL,
+                config->vbatmincellvoltage[i], config->vbatmaxcellvoltage[i]);
+        }
+        if (config->vbatwarningcellvoltage[i] < config->vbatmincellvoltage[i] ||
+            config->vbatwarningcellvoltage[i] > config->vbatfullcellvoltage[i]) {
+            config->vbatwarningcellvoltage[i] = constrain(VBAT_CELL_VOLTAGE_DEFAULT_WARN,
+                config->vbatmincellvoltage[i], config->vbatfullcellvoltage[i]);
+        }
+    }
 }
 
 
@@ -308,7 +401,7 @@ static bool isVoltageFromBat(void)
 
     // We want to disable battery getting detected around USB voltage or 0V
     return (voltage >= batteryConfig()->vbatnotpresentcellvoltage         // Above ~0V
-            && voltage <= batteryConfig()->vbatmaxcellvoltage)            // 1s max cell voltage check
+            && voltage <= getBatteryMaxCellVoltage())                     // 1s max cell voltage check
             || voltage > batteryConfig()->vbatnotpresentcellvoltage * 2;  // USB voltage - 2s or more check
 }
 
@@ -381,8 +474,8 @@ static uint8_t batteryGuessCellCount(uint16_t voltage)
 
     for (unsigned index = 0; index < ARRAYLEN(cellDetectCounts); index++) {
         const uint32_t cells = cellDetectCounts[index];
-        if (voltage < cells * (uint32_t)batteryConfig()->vbatmincellvoltage ||
-            voltage > cells * (uint32_t)batteryConfig()->vbatmaxcellvoltage) {
+        if (voltage < cells * (uint32_t)getBatteryMinCellVoltage() ||
+            voltage > cells * (uint32_t)getBatteryMaxCellVoltage()) {
             continue;
         }
         const uint32_t perCell = voltage / cells;
@@ -395,14 +488,10 @@ static uint8_t batteryGuessCellCount(uint16_t voltage)
     return best;
 }
 
-// Set once the pilot writes a cell count while disarmed; cleared by a power
-// cycle or by writing 0.
-static bool batteryCellCountLocked;
-
 static void batteryUpdateCellThresholds(void)
 {
-    batteryWarningVoltage = batteryCellCount * batteryConfig()->vbatwarningcellvoltage;
-    batteryCriticalVoltage = batteryCellCount * batteryConfig()->vbatmincellvoltage;
+    batteryWarningVoltage = batteryCellCount * getBatteryWarningCellVoltage();
+    batteryCriticalVoltage = batteryCellCount * getBatteryMinCellVoltage();
     batteryWarningHysteresisVoltage = (batteryWarningVoltage > batteryConfig()->vbathysteresis) ? batteryWarningVoltage - batteryConfig()->vbathysteresis : 0;
     batteryCriticalHysteresisVoltage = (batteryCriticalVoltage > batteryConfig()->vbathysteresis) ? batteryCriticalVoltage - batteryConfig()->vbathysteresis : 0;
 }
@@ -411,8 +500,8 @@ static void batteryApplyCellCount(void)
 {
     if (batteryCellCountLocked) {
         // The pilot's value for this power cycle, nothing may override it.
-        if (batteryConfig()->batteryCellCount != 0) {
-            batteryCellCount = batteryConfig()->batteryCellCount;
+        if (getBatteryProfileCellCount() != 0) {
+            batteryCellCount = getBatteryProfileCellCount();
         }
     }
     else {
@@ -423,7 +512,7 @@ static void batteryApplyCellCount(void)
             cells = batteryGuessCellCount(voltage);
         }
         if (cells == 0) {
-            cells = batteryConfig()->batteryCellCount;
+            cells = getBatteryProfileCellCount();
         }
         if (cells == 0) {
             cells = batteryCellCount;
@@ -481,7 +570,7 @@ void batteryRefreshCellCount(void)
     }
 
     // Writing 0 releases the lock and hands the count back to auto detection.
-    batteryCellCountLocked = (batteryConfig()->batteryCellCount != 0);
+    batteryCellCountLocked = (getBatteryProfileCellCount() != 0);
 
     batteryApplyCellCount();
 }
@@ -580,6 +669,9 @@ static void batteryUpdateStates(timeUs_t currentTimeUs)
 void taskBatteryAlerts(timeUs_t currentTimeUs)
 {
     if (!ARMING_FLAG(ARMED)) {
+        if (batteryProfileChanged) {
+            applyBatteryProfile();
+        }
         // the battery *might* fall out in flight, but if that happens the FC will likely be off too unless the user has battery backup.
         batteryUpdatePresence();
     }
@@ -606,6 +698,9 @@ void taskBatteryVoltageUpdate(timeUs_t currentTimeUs)
 #if defined(USE_FBUS_MASTER) || defined(USE_SPORT_MASTER)
     voltageSensorFBUSRefresh();
 #endif
+#ifdef USE_CRSF_SENSORS
+    voltageSensorCRSFRefresh();
+#endif
 
     switch (batteryConfig()->voltageMeterSource) {
         case VOLTAGE_METER_ADC:
@@ -624,6 +719,20 @@ void taskBatteryVoltageUpdate(timeUs_t currentTimeUs)
         case VOLTAGE_METER_FBUS:
 #if defined(USE_FBUS_MASTER) || defined(USE_SPORT_MASTER)
             if (voltageSensorFBUSRead(&voltageMeter)) {
+                batteryVoltage = filterApply(&voltageFilter, voltageMeter.sample);
+            } else {
+                voltageMeterReset(&voltageMeter);
+                batteryVoltage = 0;
+            }
+#else
+            voltageMeterReset(&voltageMeter);
+            batteryVoltage = 0;
+#endif
+            break;
+
+        case VOLTAGE_METER_CRSF:
+#ifdef USE_CRSF_SENSORS
+            if (voltageSensorCRSFRead(&voltageMeter)) {
                 batteryVoltage = filterApply(&voltageFilter, voltageMeter.sample);
             } else {
                 voltageMeterReset(&voltageMeter);
@@ -663,7 +772,10 @@ void taskBatteryCurrentUpdate(timeUs_t currentTimeUs)
 #endif
 
 #if defined(USE_FBUS_MASTER) || defined(USE_SPORT_MASTER)
-    currentSensorFBUSRefresh();
+    currentSensorFBUSRefresh(currentTimeUs);
+#endif
+#ifdef USE_CRSF_SENSORS
+    currentSensorCRSFRefresh();
 #endif
 
     switch (batteryConfig()->currentMeterSource) {
@@ -695,6 +807,20 @@ void taskBatteryCurrentUpdate(timeUs_t currentTimeUs)
 #endif
             break;
 
+        case CURRENT_METER_CRSF:
+#ifdef USE_CRSF_SENSORS
+            if (currentSensorCRSFRead(&currentMeter)) {
+                batteryCurrent = filterApply(&currentFilter, currentMeter.sample);
+            } else {
+                currentMeterReset(&currentMeter);
+                batteryCurrent = 0;
+            }
+#else
+            currentMeterReset(&currentMeter);
+            batteryCurrent = 0;
+#endif
+            break;
+
         default:
             currentMeterReset(&currentMeter);
             batteryCurrent = 0;
@@ -708,9 +834,8 @@ void taskBatteryCurrentUpdate(timeUs_t currentTimeUs)
 
 void batteryInit(void)
 {
-    if (batteryConfig()->batteryProfile >= BATTERY_PROFILE_COUNT) {
-        batteryConfigMutable()->batteryProfile = 0;
-    }
+    pendingBatteryProfile = batteryConfig()->batteryProfile;
+    batteryProfileChanged = false;
 
     voltageMeterReset(&voltageMeter);
     currentMeterReset(&currentMeter);
