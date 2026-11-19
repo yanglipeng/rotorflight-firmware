@@ -1,17 +1,18 @@
-# AK700 · Rotorflight 4.6.0（含定速器 / 救机本地修复）
+# AK700 · Rotorflight 4.7.0（上游 4.7.0 + 定速器 / 救机 / 电池本地修复）
 
-这是我（yanglipeng）的 **AK700 700 级直升机**固件树，基于 Rotorflight 上游提交
-[`be6a67f`](https://github.com/rotorflight/rotorflight-firmware/commit/be6a67f)（`snapshot/4.6.0-20260208`，
-固件版本 **4.6.0**，MSP API **12.9**），在本地叠加了几处修复（定速器 / 救机 / 电池节数 / 定速器恢复），
-其余与上游一致。具体见下方「与上游的差异」。
+这是我（yanglipeng）的 **AK700 700 级直升机**固件树：以 Rotorflight 上游 `master`
+[`3bc524d`](https://github.com/rotorflight/rotorflight-firmware/commit/3bc524d)（固件版本 **4.7.0**，
+MSP API **12.10**）为基础合并，并在其上保留本地几处修复（定速器恢复 / 起转自限幅 / 独立超速保护、
+救机总距限速、电池节数检测）。具体见下方「与上游的差异」。
 
 | 项 | 值 |
 | --- | --- |
 | 机体 | AK700 |
 | 飞控 | FlyDragon V2.2（`board_name FLYDRAGON_V2_2`） |
 | MCU | STM32F722 · 统一目标 `STM32F7X2` · 512 KB flash |
-| 飞机里实际运行的固件 | `4.6.0 Nov  9 2026 / 15:07:22 (norevision)` |
-| 配套地面站 | Rotorflight Configurator 2.3.0-20260208 |
+| 飞机里实际运行的固件 | `4.7.0 Nov 19 2026 / 16:27:30 (norevision)` · MSP API **12.10** |
+| 配套地面站 | 需 **4.7 代** Rotorflight Configurator（API 12.10；旧版会提示版本不支持） |
+| Flash 占用 | 488 516 B / 491 520 B，余 **3 004 B** |
 
 > 上游说明文档保留在 [README-upstream.md](README-upstream.md)。
 
@@ -19,14 +20,20 @@
 
 | 文件 | 说明 |
 | --- | --- |
-| **[`AK700/firmware/AK700_firmware_4.6.0_20261109_overspeed-fix.hex`](AK700/firmware/AK700_firmware_4.6.0_20261109_overspeed-fix.hex)** | **最新固件**（2026-11-09：修「往下切转速档时超速保护误触发、油门被清零」；含 11-07 的起转自限幅 + 独立超速保护 + 电池修复 + 定速器恢复） |
+| **[`AK700/firmware/AK700_firmware_4.7.0_20261119.hex`](AK700/firmware/AK700_firmware_4.7.0_20261119.hex)** | **最新固件（4.7.0）**。地面站刷这个：已含 custom defaults（板级资源映射），可直接刷到同为 FlyDragon V2.2 的飞控；**不含参数区**，不会把本机参数带过去 |
+| [`AK700/firmware/AK700_flash_full_512k_20261119.bin`](AK700/firmware/AK700_flash_full_512k_20261119.bin) | 2026-11-19 刷机前的整片 512 KB 备份（4.6.0 固件 + 当日参数 + 154 次飞行统计），整片回滚用 |
+| [`AK700/config/AK700_cli_restore_4.7.0.txt`](AK700/config/AK700_cli_restore_4.7.0.txt) | **4.7.0 参数恢复文件**（315 行，5 个电池项已改成 6 元数组），刷完粘进 CLI |
+| [`AK700/config/AK700_cli_diff_all_20261119.txt`](AK700/config/AK700_cli_diff_all_20261119.txt) | 4.6.0 刷机前的原始 `diff all` 留档 |
+| **[`AK700/firmware/AK700_firmware_4.6.0_20261109_overspeed-fix.hex`](AK700/firmware/AK700_firmware_4.6.0_20261109_overspeed-fix.hex)** | 4.6.0 最后一版（2026-11-09），回退用 |
 | [`AK700/firmware/AK700_firmware_4.6.0_20261106_battery-apply.hex`](AK700/firmware/AK700_firmware_4.6.0_20261106_battery-apply.hex) | 2026-11-06 构建（电池节数立即生效），回退用 |
 | [`AK700/firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex`](AK700/firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex) | 2026-11-05 构建（定速器恢复修复），回退用 |
 | [`AK700/firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex`](AK700/firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex) | 2026-11-03 构建（不含定速器恢复修复），回退用 |
 | [`AK700/firmware/AK700_firmware_4.6.0_20261023.hex`](AK700/firmware/AK700_firmware_4.6.0_20261023.hex) | 飞机最初那一版的原样镜像（从飞控 DFU 整片读出） |
-| [`AK700/firmware/AK700_flash_full_512k_20261109.bin`](AK700/firmware/AK700_flash_full_512k_20261109.bin) | 2026-11-09 刷机前的整片 512 KB 备份（11-07 固件 + 当日参数 + 统计） |
-| [`AK700/firmware/AK700_config_sector_16k.bin`](AK700/firmware/AK700_config_sector_16k.bin) | 参数区 16 KB 二进制备份（`0x08004000–0x08007FFF`，2026-11-09 状态） |
-| [`AK700/config/AK700_cli_restore_20261109.txt`](AK700/config/AK700_cli_restore_20261109.txt) | 全部参数（CLI `diff all`），粘进 CLI 即可恢复 |
+| [`AK700/firmware/AK700_flash_full_512k_20261109.bin`](AK700/firmware/AK700_flash_full_512k_20261109.bin) | 2026-11-09 整片备份（11-07 固件 + 当日参数 + 统计） |
+| [`AK700/firmware/AK700_config_sector_16k.bin`](AK700/firmware/AK700_config_sector_16k.bin) | 参数区 16 KB 备份（`0x08004000–0x08007FFF`，2026-11-09 状态） |
+
+> **刷 4.7.0 前必读**：[AK700/UPGRADE-4.7.0.md](AK700/UPGRADE-4.7.0.md) —— 含参数迁移、刷机安全流程、
+> 以及 2026-11-19 那次 `dfu-util` 静默失败（固件未落盘导致 USB 不枚举）的完整复盘。
 
 多个 hex 之间只差编译日期串和所带修复的多少；详细说明、SHA256、刷写步骤、逐版本 changelog 见
 **[AK700/README.md](AK700/README.md)**。
@@ -88,11 +95,39 @@
 请求一变就清超速计时器，另加 2500 ms 兜底防止卡死。仿真验证：切档不再切油，而「目标不变、转速持续
 超 1.2×」仍然在 251 ms 内跳闸（保护完好）。
 
+**6. 2026-11-19 合并上游 4.7.0**
+
+从 `be6a67f`（4.6.0）合并到上游 `master` `3bc524d`（4.7.0，29 个提交）。上游带来的主要新功能：
+
+- **#508 电池配置改为「每个 profile 各存一份节数和 4 个单节电压」** —— 对 7S / 13S / 14S 混用最实用；
+- #538 cyclic / yaw **master gain**（按比例缩放 P/D/I，换旋翼头不用重调 PID）；
+- #533 `SYSTEM_STATUS` / `SYSTEM_CONFIG` 遥测传感器；
+- #499 / #500 RX 串口与 ESC 遥测**接线自动识别**；#540 飞控板**自动找平**；
+- #518 XACT 舵机 F.Bus 编程；#497 CRSF 外置传感器解码；#523 tune advisor；
+- 行为变更：#527 遥测**默认打开**；#514 统一目标禁用 GHOST / PPM / PARALLEL_PWM；#492 关闭 CMS。
+
+冲突只有 3 个文件 6 块，解决方式：
+
+- `README.md`：取本地中文版（上游只是把文档链接改到 doc 站）；
+- `src/main/sensors/battery.c`：保留本地的节数检测（armed 锁定、4.05/3.91/3.80 三段窗口、13S/14S），
+  把 7 处标量字段换成 `getBatteryProfileCellCount()` / `getBattery*CellVoltage()` 访问器，
+  `batteryCellCountLocked` 声明上移，并在 `applyBatteryProfile()` 里清锁（切 profile 时交回自动检测）；
+- `src/main/msp/msp.c`：回复里报告**实际生效**的节数；保留上游 54 字节的分 profile 解析块并在尾部调用
+  `batteryRefreshCellCount()`；legacy 标量字节在数组之后生效，保证遥控器 `cellcount.lua` 的
+  「读出整包→改字节→写回」仍然有效。
+
+**`governor.c` 与 `rescue.c` 上游一次都没碰**，所以 1–5 节的本地修复合并后逐字未变。
+
+> ⚠️ **PG 版本变化**：battery 5→6、pid 0→1、feature 1→2、telemetry 6→8。刷 4.7.0 后这些参数组会
+> 恢复默认值，必须重新灌 CLI。跨版本**不能**只回灌参数区 dump。迁移文件见
+> [`AK700/config/AK700_cli_restore_4.7.0.txt`](AK700/config/AK700_cli_restore_4.7.0.txt)。
+
 查看具体改动：
 
 ```bash
 git log -1 --stat
 git diff be6a67f HEAD -- src/main/flight/
+git log --oneline be6a67f..HEAD -- src/main/    # 上游 29 个提交
 ```
 
 ## 编译
@@ -108,26 +143,44 @@ make TARGET=STM32F7X2 \
      EXTRA_FLAGS=-Wno-error
 ```
 
-产物：`obj/rotorflight_4.6.0_STM32F7X2.hex`。
+产物：`obj/rotorflight_4.7.0_STM32F7X2.hex`。
+
+> ⚠️ **编出来的 hex 不含 custom defaults！** 板级资源映射（BEEPER / MOTOR / SERVO / SPI / ADC /
+> timer / dma / 陀螺仪 / 串口）存在独立的 `0x08002808–0x08003FFF` 区，由链接脚本预留位置但**不在 hex 里**。
+> 直接刷这个 hex，飞控会报 `###WARNING: NO CUSTOM DEFAULTS FOUND###`，板级映射全部缺失。
+>
+> 所以刷机要用**整片 512 KB 镜像**：把 hex 的固件段 + 从旧备份取来的 custom defaults 与参数区拼在一起。
+> 本仓库的 `AK700/firmware/AK700_firmware_4.7.0_20261119.hex` 已经补齐 custom defaults，可直接用。
 
 ## 一致性验证
 
-用本仓库源码 `make clean` 全量重编，与从飞控 DFU 读出的整片 512 KB 镜像逐字节比对：
+4.7.0 刷入后，在 DFU 模式下逐处读回比对：
 
-| 区域 | 大小 | 差异 |
+| 地址 | 内容 | 结果 |
 | --- | --- | --- |
-| `.isr_vector` | 480 B | 0 |
-| `.pg_registry`（参数组注册表） | 2 156 B | 0 |
-| `.pg_resetdata`（参数默认值） | 848 B | 0 |
-| `.text`（全部代码） | 460 412 B | 22（仅编译日期字符串） |
-| `.data` | 13 068 B | 0 |
+| `0x08000000` | 向量表：SP=`0x20010000`、Reset=`0x080671F1` | 逐字节一致 |
+| `0x08002808` | `## Rotorflight Custom Defaults` 标记 | 一致，板级映射生效 |
+| `0x08008000` | 代码段首 `08 4A 03 46` | 一致 |
+| `0x0807F443` | 代码段末，之后全 `FF` | 一致 |
 
-> 上表是 **2026-11-02 基线**的核对结果（当时飞机里那版 = 本仓库源码构建）。之后每次改动都只增代码、
-> 不动参数组（PG），所以 **参数布局依旧一致**，各版本之间互刷不会重置参数。
-> 每次刷机后都会用 DFU 回读参数区与刷前备份逐字节比对（最近一次 **2026-11-09**：参数区 **0/16384**、
-> custom defaults **0/6144**、下方镜像 **16384 B 全同**、主代码 **490504 B 全同**）。
->
-> ⚠️ Flash 余量已经很紧：2026-11-09 版镜像结束于 `0x0807FC08`，480 KB 固件区**只剩 1016 B**。
+> ⚠️ **不要相信 `dfu-util` 的返回码。** 2026-11-19 出现过三段写入全部报 `EXIT=0` /
+> `File downloaded successfully`、实际 flash 一个字节都没写进去的情况（起因：把 `.hex` 直接喂给 `-D`，
+> dfu-util 不支持 Intel HEX，地址算到 `0x08151493` 越界，设备进入 `firmware is corrupt` 状态后
+> 后续写入静默失效）。**每次写完必须 `-U` 读回比对。** 详见 [AGENTS.md](AGENTS.md) 的
+> 「Local Build and Flash Safety」与 [AK700/UPGRADE-4.7.0.md](AK700/UPGRADE-4.7.0.md)。
+
+Flash 占用（480 KB 代码区 `0x08008000–0x0807FFFF` = 491 520 B）：
+
+| 构建 | 占用 | 余量 |
+| --- | --- | --- |
+| 4.6.0 + 本地改动（2026-11-10，刷机前在飞） | 490 100 B | 1 420 B |
+| 纯上游 4.7.0（未叠加本地修复） | 486 280 B | 5 240 B |
+| **4.7.0 + 本地改动（当前）** | **488 516 B** | **3 004 B** |
+
+> 上游 4.7.0 反而比 4.6.0 小：新增 `fbus_xact` / `crsf_sensors` / `tune_advisor` / `status` 约 5.4 KB，
+> 但 #514 关掉 GHOST / PPM / PARALLEL_PWM、#492 关掉 CMS，连带剔掉一批协议栈，净减约 1.6 KB。
+> 本地三块修复（定速器 + 救机 + 电池）实测只占 2 220 B。
+> RAM 不是瓶颈：DTCM 40 760 / 64 KB（62%），SRAM1 92 184 / 176 KB（51%）。
 
 ## 许可
 

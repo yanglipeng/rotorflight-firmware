@@ -4,17 +4,19 @@
 
 | 项 | 值 |
 | --- | --- |
-| 导出时间 | 2026-11-09（最近一次整片/参数区导出），先前 2026-11-02 |
+| 导出时间 | 2026-11-19（4.7.0 刷入当天：整片备份 + 参数导出），先前 2026-11-09、2026-11-02 |
 | 飞控 | FlyDragon V2.2（`board_name FLYDRAGON_V2_2`，mcu_id `002600483433510931353834`） |
 | MCU | STM32F722 / `STM32F7X2`，512 KB flash |
-| 固件版本行（飞机当前） | `Rotorflight / STM32F7X2 (S7X2) 4.6.0 Nov  9 2026 / 15:07:22 (norevision) MSP API: 12.9` |
+| 固件版本行（飞机当前） | `Rotorflight / STM32F7X2 (S7X2) 4.7.0 Nov 19 2026 / 16:27:30 (norevision) MSP API: 12.10` |
 | 导出方式 | DFU 只读整片 512 KB（`dfu-util -U`）+ 飞控 CLI `diff all` |
 
 ## 一、文件清单
 
 | 文件 | 大小 | 说明 |
 | --- | --- | --- |
-| `firmware/AK700_firmware_4.6.0_20261109_overspeed-fix.hex` | 1 387 194 B | **最新固件（2026-11-09）**：修「往下切转速档时超速保护误触发、油门被清零」；含 11-07 的起转自限幅 + 独立超速保护。地面站「固件烧写」直接选它 |
+| `firmware/AK700_firmware_4.7.0_20261119.hex` | 1 199 288 B | **最新固件（4.7.0，2026-11-19）**：上游 `master` 4.7.0 合并 + 全部本地修复（定速器 / 救机 / 电池）。**已补入 custom defaults**，地面站「固件烧写」直接选它；不含参数区，可刷同为 FlyDragon V2.2 的飞控 |
+| `firmware/AK700_flash_full_512k_20261119.bin` | 524 288 B | 2026-11-19 刷 4.7.0 **之前**的整片备份（4.6.0 固件 + 当日参数 + 154 次飞行统计），整片回滚用 |
+| `firmware/AK700_firmware_4.6.0_20261109_overspeed-fix.hex` | 1 387 194 B | 4.6.0 最后一版（2026-11-09）：修「往下切转速档时超速保护误触发、油门被清零」；含 11-07 的起转自限幅 + 独立超速保护 |
 | `firmware/AK700_firmware_4.6.0_20261106_battery-apply.hex` | 1 383 549 B | 2026-11-06 构建（电池节数立即生效），不含 11-07 的定速器改动，回退用 |
 | `firmware/AK700_firmware_4.6.0_20261105_governor-recovery.hex` | 1 383 549 B | 2026-11-05 构建（定速器恢复安全修复），不含本次电池修复 |
 | `firmware/AK700_firmware_4.6.0_20261103_battery-refresh.hex` | 1 382 379 B | 2026-11-03 构建（电池刷新 + 13S/14S 检测），保留作对照 / 回退 |
@@ -43,6 +45,10 @@
 ## 二、校验（SHA256）
 
 ```
+7D4BC294B08CCBC61BE0B8DD24F72C3AC8760EDB9AA0619DADA0E8BD428B5A6F  firmware/AK700_firmware_4.7.0_20261119.hex
+882E33F9B2B3D840D4F54E1A5663EA8BA5F00B09F2DF6CB25935FE2BB20F3B97  firmware/AK700_flash_full_512k_20261119.bin
+4BFB629D42141165B6A45D79B6A7F285C89C62BC237FE57F71965D810EEDED01  config/AK700_cli_diff_all_20261119.txt
+44831EABA49045B5AC1B834441FA02576B897897994928A97E711C8628842E79  config/AK700_cli_restore_4.7.0.txt
 833B3A5D421A0A89F1FCC516705D69753D5E8EFB13C01F19012EC2EB482E526E  firmware/AK700_firmware_4.6.0_20261109_overspeed-fix.hex
 2A4087C142499FD69D95BFCE9123E5FC7ECC5089B83DA3A06B7102E91BBB5889  firmware/AK700_flash_full_512k_20261109.bin
 6638AB80E36D13446C0836F0C783FC0D9A6B27A5A7FE3ABED6AE2714F792544F  firmware/AK700_config_sector_16k.bin
@@ -65,6 +71,48 @@ C8584E6F34120BEDCB5B9EE13B1B4506678FED5255CDA784F9EFBF28E2E32DB9  config/AK700_c
 ```
 
 ## 二之二、版本更新记录
+
+### 2026-11-19：升级到 Rotorflight 4.7.0（合并上游 29 个提交）
+
+从上游 `master` `3bc524d` 合并，固件 **4.7.0**、MSP API **12.10**。
+
+**上游带来的新功能**（对 AK700 有用的排前面）：
+
+| 提交 | 内容 |
+| --- | --- |
+| #508 | 电池配置改为**每个 profile 各存一份节数和 4 个单节电压** —— 7S / 13S / 14S 可以一个 profile 一种 |
+| #538 | cyclic / yaw **master gain**（按比例缩放 P/D/I，换旋翼头不用重调 PID） |
+| #533 | `SYSTEM_STATUS` / `SYSTEM_CONFIG` 遥测传感器 |
+| #499 / #500 | RX 串口、ESC 遥测**接线自动识别** |
+| #540 | 飞控板**自动找平** |
+| #518 | XACT 舵机 F.Bus 编程；#497 CRSF 外置传感器解码；#523 tune advisor |
+
+**冲突与解决**（3 个文件 6 块）：
+
+- `README.md` → 取本地中文版；
+- `sensors/battery.c` → 保留本地节数检测，7 处标量字段换成 `getBatteryProfileCellCount()` /
+  `getBattery*CellVoltage()`；`batteryCellCountLocked` 上移并在 `applyBatteryProfile()` 里清锁；
+- `msp/msp.c` → 回复报告实际生效节数；保留上游 54 字节 profile 解析块 + 尾部 `batteryRefreshCellCount()`；
+  legacy 标量字节在数组之后生效（保证遥控器 `cellcount.lua` 的读改写仍有效）。
+
+`governor.c` / `rescue.c` 上游未碰，本地修复逐字保留。
+
+**必须重灌参数**：PG 版本 battery 5→6、pid 0→1、feature 1→2、telemetry 6→8。
+迁移文件 `config/AK700_cli_restore_4.7.0.txt`（5 个电池项改成 6 元数组，其余 290 行逐字未动）。
+
+**Flash**：488 516 B / 491 520 B，余 **3 004 B**（比 4.6.0 的 1 420 B 更宽裕）。
+
+> ⚠️ **刷机事故复盘（2026-11-19）**：第一次刷 4.7.0 时把 `.hex` 直接传给
+> `dfu-util -D`（dfu-util 不支持 Intel HEX），地址算到 `0x08151493` 越界，设备进入
+> `firmware is corrupt` 状态；随后三段 bin 写入**全部返回 `EXIT=0` 但一个字节都没落盘**，
+> 导致刷完飞控 USB 完全不枚举。靠 `AK700_flash_full_512k_20261119.bin` 整片回滚恢复，
+> 参数 183 行逐行一致。
+> **教训**：hex 必须先转 bin；写完必须 `-U` 读回验证（`0x08000000` 首 4 字节应为 `00 00 01 20`）；
+> 整片 512 KB 一次写入，不分段。完整规则见根目录 [AGENTS.md](../AGENTS.md)。
+>
+> 另外：编出来的 hex **不含 custom defaults**（板级资源映射在 `0x08002808–0x08003FFF`，
+> 由链接脚本预留、不在 hex 里）。直接用未补齐的 hex 会报 `###WARNING: NO CUSTOM DEFAULTS FOUND###`。
+> 本目录的 `AK700_firmware_4.7.0_20261119.hex` 已补齐。
 
 ### 2026-11-09：定速器「往下切转速档时油门被清零」修复（含 11-07 的起转保护）
 
@@ -196,12 +244,15 @@ C8584E6F34120BEDCB5B9EE13B1B4506678FED5255CDA784F9EFBF28E2E32DB9  config/AK700_c
 
 ## 三、怎么刷
 
-### 1. 只刷固件（日常推荐）
+### 1. 只刷固件（换版本时用）
 
-1. 地面站（Rotorflight Configurator，MSP API 12.9）连上飞控
-2. 「固件烧写 / Firmware Flasher」→ 选 `firmware/AK700_firmware_4.6.0_*.hex`
-3. **不要勾 Full chip erase**（参数在配置区 `0x08004000`，这两个 hex 都不含该区域）
-4. 刷完进 CLI 敲 `version`，应显示 `4.6.0 ... MSP API: 12.9`
+1. 地面站（Rotorflight Configurator，**需 4.7 代**，支持 MSP API 12.10）连上飞控
+2. 「固件烧写 / Firmware Flasher」→ 选 `firmware/AK700_firmware_4.7.0_20261119.hex`
+3. **建议勾 Full chip erase**：这个 hex 已含 custom defaults（`0x08002808–0x08003FFF`），
+   全片擦除后会被重新写入；不勾也可以，但参数区残留的 4.6.0 数据会因 PG 版本不匹配而被重置，结果一样
+4. 刷完进 CLI 敲 `version`，应显示 `4.7.0 ... MSP API: 12.10`，且 `diff all` 开头**不应**有
+   `###WARNING: NO CUSTOM DEFAULTS FOUND###`
+5. 粘贴 `config/AK700_cli_restore_4.7.0.txt` 恢复参数（见第 3 小节）
 
 ### 2. 整片还原（连参数和飞行统计一起）
 
@@ -209,16 +260,18 @@ C8584E6F34120BEDCB5B9EE13B1B4506678FED5255CDA784F9EFBF28E2E32DB9  config/AK700_c
 
 ```bash
 # Windows 下 dfu-util 0.11 可从 https://dfu-util.sourceforge.net/releases/ 下载
-dfu-util -a 0 -d 0483:df11 -s 0x08000000:0x80000:leave -D AK700_flash_full_512k_20261023.bin
+dfu-util -a 0 -d 0483:df11 -s 0x08000000:0x80000:leave -D AK700_flash_full_512k_20261119.bin -v
 ```
 
-会把参数和 `stats_total_flights = 93`、`stats_total_time_s = 25259` 一起写回，写完自动重启。
+会把参数和 `stats_total_flights = 154`、`stats_total_time_s = 34457` 一起写回，写完自动重启。
 
-> 导出时用的就是同一个工具的参数 `-U`，全程只读，没擦没写。
+> ⚠️ **一定要加 `-v`，并且写完读回验证**。`dfu-util` 的返回码不可靠：2026-11-19 出现过
+> 三段写入全部报成功、实际 flash 为空的情况。验证方法：
+> `dfu-util -a 0 -d 0483:df11 -s 0x08000000:16 -U probe.bin`，首 4 字节应为 `00 00 01 20`。
 
 ### 3. 只恢复参数（换固件版本之后）
 
-地面站 → CLI，把 `config/AK700_cli_restore_20261109.txt` 全文粘贴进去。文件结构是标准的：
+地面站 → CLI，把 `config/AK700_cli_restore_4.7.0.txt` 全文粘贴进去。文件结构是标准的：
 
 ```
 batch start
@@ -227,16 +280,21 @@ defaults nosave
 save
 ```
 
-粘贴完自动执行并保存。末尾会切回导出时激活的档位（本次是 `profile 0` / `rateprofile 0`）。
+粘贴完自动执行并保存。末尾会切回导出时激活的档位（`profile 0` / `rateprofile 0`）。
+
+> 4.7.0 的 5 个电池项已改成 6 元数组（每个电池 profile 一份）：
+> `battery_cell_count = 14,14,14,14,14,14`、`vbat_max_cell_voltage = 420,420,420,420,420,420` 等。
+> 若想让 #508 的自动识别接管节数，把 `battery_cell_count` 改成 `0,0,0,0,0,0`。
 
 ## 四、参数速查
 
-- **3 个 PID profile 对应三档转速**：profile 0 = `gov_headspeed 1150`、profile 1 = 1800、profile 2 = 1950
+- **3 个 PID profile 对应三档转速**：profile 0 = `gov_headspeed 1250`、profile 1 = 1900、profile 2 = 2200
   （`gov_f_gain` 三个 profile 都是 30；profile 2 的 `gov_gain` 是 35，其余用默认 40）
-- **定速器前馈**：`gov_f_gain = 30`（2026-11-09 由 15/20/20 上调，治大机动时转速下垂）
-- **救机**：`rescue_mode = CLIMB`，三个 profile 的 collective 分别为 950/900/800、860/800/700、860/800/674
-- **训练模式**：`acro_trainer_angle_limit = 25`（profile 级参数，改手感不必动固件）
-- **自平**：`angle_level_strength = 75`、`angle_level_limit = 30`
+- **定速器前馈**：`gov_f_gain = 30`（治大机动时转速下垂）
+- **救机**：`rescue_mode = CLIMB`，三个 profile 的 pull_up/climb/hover collective 分别为
+  900/900/800、860/800/700、860/800/674；`rescue_max_collective = 900`
+- **自平**：`angle_level_strength = 75`、`angle_level_limit = 25`
+- **电池**：`battery_cell_count = 14,14,14,14,14,14`（5 个电池项在 4.7.0 都是 6 元数组）
 - **定速器**：`gov_mode = ELECTRIC`、`gov_handover_throttle = 10`、`gov_fallback_drop = 0`、`esc_sensor_protocol = ZTW`
 - **调试**：`debug_mode = GOVERNOR`（分析完日志建议改回 `NONE`）
 - **模式开关**：SF = 解锁、SG = ANGLE/TRAINER、SH = RESCUE、SB = 蜂鸣 / 静音
@@ -244,7 +302,11 @@ save
 ## 五、注意事项
 
 1. 刷写前先让地面站断开连接，免得和刷写工具抢串口。
-2. 别勾 Full chip erase，除非你打算刷完立刻粘贴上面的参数文件。
+2. 换大版本（4.6→4.7）建议勾 Full chip erase，之后立刻粘贴参数文件；同版本内更新可以不勾。
 3. 刷写中断不用担心：STM32F7 有 ROM bootloader，飞控会停在 DFU 里，重新刷即可。
-4. `dfu-util -e`（detach）在 STM32 ROM DFU 上不生效，读完 / 写完想回正常模式就**拔插一次 USB**。
-5. Flash 已经非常满：480 KB 固件区**只剩 1016 B**（2026-11-09 版，镜像结束于 `0x0807FC08`），后续加功能得先砍东西。
+   **ROM DFU 在独立的系统存储区，固件刷写永远碰不到它，芯片刷不坏** —— 按住 BOOT0 插 USB 一定能救。
+4. `dfu-util -e`（detach）在 STM32 ROM DFU 上不生效（返回 `can't detach`），读完 / 写完想回正常模式就
+   **拔插一次 USB**。
+5. **不要相信 `dfu-util` 的返回码**。写完必须读回验证，详见上文「二、校验」和根目录 `AGENTS.md`。
+6. Flash 余量：4.7.0 版占用 488 516 B，480 KB 固件区**剩 3 004 B**（比 4.6.0 的 1 016 B 宽裕），
+   但后续加功能仍需留意。
