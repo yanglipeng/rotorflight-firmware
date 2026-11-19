@@ -1,3 +1,10 @@
+-- AK7HUD: 先尝试装 RFSuite 桥接层（见 rfsuite_bridge.lua）。它只在「RF Tool 没在跑
+-- 且 rfsuite.msp 可用」时生效，其余情况完全不动手，下面所有 rf2 相关路径照旧。
+do
+  local chunk = loadScript("/WIDGETS/AK7HUD/rfsuite_bridge.lua", "t")
+  if type(chunk) == "function" then pcall(chunk) end
+end
+
 local G = {
   referenceW=800, referenceH=480,
   screenW=tonumber(LCD_W) or 800, screenH=tonumber(LCD_H) or 480,
@@ -3512,6 +3519,15 @@ end
 
 local function profileRf2()
   local value = rawget(_G, "rf2") or _G.rf2
+  if type(value) ~= "table" then
+    -- RFSuite 的 runtime 可能比本 widget 起得晚：每次探测都让桥接层再试一次，
+    -- 它自己会判断 rf2 是否已存在、rfsuite.msp 是否可用，重复调用是安全的。
+    local bridge = rawget(_G, "__ak7hud_bridge")
+    if type(bridge) == "table" and type(bridge.install) == "function" then
+      pcall(bridge.install)
+    end
+    value = rawget(_G, "rf2")
+  end
   return type(value) == "table" and value or nil
 end
 

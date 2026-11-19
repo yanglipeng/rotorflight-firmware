@@ -3,7 +3,8 @@
 AK700 用的 Rotorflight 主屏控件，从 **KSE4** fork 而来（保留原版所有已跑通的功能），
 专治 KSE4 几个反复坑人的毛病，并把「电池节数 / 单片电压报警」做成干净、可回退的独立模块。
 
-> 适配环境：EdgeTX 2.12.x（HelloRadio V16 实测）、Rotorflight 4.6.0（MSP API 12.9）。
+> 适配环境：EdgeTX 2.12.x（HelloRadio V16 实测）、Rotorflight 4.7.0（MSP API 12.10）。
+> 兼容 Rotorflight 4.6.0（MSP API 12.9）；依赖官方 Lua 脚本包 RF Tool 2.3.x（`/WIDGETS/RfTool/`）。
 > 两者独立共存——**不改 KSE4 的任何文件**，随时切回。
 
 ## 一、为什么另起一个（KSE4 的弊端）
@@ -21,13 +22,16 @@ AK700 用的 Rotorflight 主屏控件，从 **KSE4** fork 而来（保留原版�
 
 | 文件 | 大小 | 说明 |
 |---|---|---|
-| `main.lua` | ~201 KB | 主屏（fork 自 KSE4，改动处都有 `AK7HUD` / `akCells` 注释标记） |
+| `main.lua` | ~205 KB | 主屏（fork 自 KSE4，改动处都有 `AK7HUD` / `akCells` 注释标记） |
 | `cellcount.lua` | ~26 KB | 电池节数 / 报警模块，惰性加载，原生 MSP 32/33/130/250 读写 |
+| `rfsuite_bridge.lua` | ~9 KB | RFSuite 桥接层：用 `rfsuite.msp` 构造 `rf2` 兼容对象（见第十三节），RF Tool 在场时完全不生效 |
+| `BatterySounds/txbatlow.wav` | 58 696 B | 遥控器（2S LiPo）低电量提示音，16 kHz 单声道；缺失时回退 `/SOUNDS/cn/lowbat.wav` |
 | `README.md` | 本文件 | |
 
 ## 三、安装 / 激活
 
-1. 把整个 `AK7HUD` 目录拷到遥控器 SD 卡：`/WIDGETS/AK7HUD/`（`main.lua` + `cellcount.lua`）
+1. 把整个 `AK7HUD` 目录拷到遥控器 SD 卡：`/WIDGETS/AK7HUD/`
+   （`main.lua` + `cellcount.lua` + `rfsuite_bridge.lua` + `BatterySounds/txbatlow.wav`；用 RF Tool 时可不要桥接层）
 2. 重启遥控器
 3. 遥控器 → 模型 → 屏幕设置 → 把主屏那个控件从 **KSE4** 换成 **AK7HUD**
 4. 确认新主屏正常显示后，再考虑删 KSE4（不删也互不影响）
@@ -140,3 +144,77 @@ AK700 用的 Rotorflight 主屏控件，从 **KSE4** fork 而来（保留原版�
 | 2026-11-03 | 配合固件 `20261103_battery-refresh`：节数写入立即生效，`REPLUG` 提示仅旧固件需要 |
 | 2026-11-10 | 飞行中禁止写电池配置/写 SD 日志/轮询校验；snapshot 加 10 s 冷却；配合新固件自动检测 |
 | 2026-11-10 | 遥控器电池改用放电曲线 + 电压阈值（2S LiPo 绿色到 7.55 V），并在 HEADSPEED 面板显示 `TX x.xV` |
+| 2026-11-19 | 固件升到 4.7.0（MSP API 12.10）。先做了兼容性核对（第十二节）：`MSP 32/33/175/176` 与 PID profile 的新旧布局全部兼容，无需改代码 |
+| 2026-11-19 | 新增 `rfsuite_bridge.lua`：装上官方 RFSuite 也能用（第十三节）；`main.lua` 只加「优先加载桥接层 + `profileRf2()` 探测不到 rf2 时重试」两处钩子，RF Tool 路径逐字未动 |
+| 2026-11-19 | 新增 `BatterySounds/txbatlow.wav`（2S 遥控器低电量提示音）—— 此前只写在 README 里，文件一直没进仓库 |
+| 2026-11-20 | 随 4.7.0 正式发版（Release `ak700-4.7.0-20261119`）。四个文件 `luac -p` 语法校验通过；**未上遥控器实机验证** |
+
+## 十二、4.7.0 / MSP API 12.10 兼容性（2026-11-19 核对）
+
+固件 4.6.0 → 4.7.0 时上游改了电池参数组（每 profile 一份节数）、PID profile 加了 master gain、
+遥测加了 SYSTEM_STATUS，一并核对了对本脚本的影响：
+
+| 项目 | 4.6.0 | 4.7.0 | 对本脚本 |
+|---|---|---|---|
+| `MSP_API_VERSION` | 12.9 | 12.10 | 通过。脚本只有 `>= 12.09` 下限判断，没有上限 |
+| `MSP_BATTERY_PROFILE` (175) / `SET` (176) | 1 字节 active index | 完全没变 | 电池 profile 切换/读取照旧 |
+| `MSP_BATTERY_CONFIG` (32) 回复 | 15 B legacy + 6×u16 capacity = 27 B | 前 27 B **逐字节不变**，尾部追加 6×u8 节数 + 4×6×u16 电压 = 81 B | `cellcount.lua` 只用到前 27 B，读取不受影响 |
+| `MSP_SET_BATTERY_CONFIG` (33) 写入 | 27 B | 追加段用 `sbufBytesRemaining` 判长度，27 B 旧包仍合法 | **必须靠固件侧本地补丁**：legacy 节数字节在 profile 数组之后再生效，否则写回的节数会被数组覆盖 |
+| `MSP_PID_PROFILE` (94) 回复 | 43 B | 44 B（尾部加 cyclic/yaw master gain） | 老 RF Tool 顺序读到 43 B 为止，多出的字节忽略，不会错位 |
+| `MSP_SET_PID_PROFILE` (95) 写入 | 43 B | 新字段有 `sbufBytesRemaining >= 2` 保护 | 老脚本写回不会把 master gain 清零 |
+| CRSF 遥测传感器 | — | 新增 `SYSTEM_STATUS`(0x1230)；GPS 高度改分米 | 本脚本不读 GPS 高度，新增传感器不被 `CUSTOM` 模式自动启用，无影响 |
+| MSP 遥测分帧 | — | #521 修复「替换回复时漏发 START 帧」 | 纯 bug 修复，对脚本只有好处（重试不再整包丢） |
+
+**结论：4.7.0 下 AK7HUD 与 RF Tool 2.3.0.1 可直接使用，无需改脚本。**
+
+> 不要换用官方新架构 **RFSuite**（`rotorflight-lua-edgetx-suite`）。它安装在 `/SCRIPTS/RFSUITE/`，
+> 不提供 `rf2` 全局、也没有 `/WIDGETS/RfTool/app.lua`，本脚本的电池模块会直接报 `INSTALL RF TOOL 2.3`。
+> RFSuite 虽然原生支持 12.10（master gain、auto-align、ESC 接线检测），但那是另一套东西，二者不共存。
+
+## 十三、RFSuite 共存（2026-11-19）
+
+上一节的结论已经改了：从 2026-11-19 起，本脚本可以跑在 **RFSuite** 上，靠的是新增的
+`rfsuite_bridge.lua`。
+
+RFSuite 把 MSP 请求面发布成 `rfsuite.msp`，注释里写得很清楚——`crossfireTelemetryPush` 只有
+一个发送槽，脚本自带队列不是拿到第二条通道，而是和它抢，两边都丢包。所以桥接层不建队列，
+只把 AK7HUD 的 `rf2.mspQueue:add(message)` 转成 `client:request{...}`。
+
+### 生效条件
+
+桥接层只在同时满足下面两条时接管，任一不满足就完全不动，AK7HUD 回到 RF Tool 原路径：
+
+1. `_G.rf2` 不存在（RF Tool 没跑，或没装）
+2. `_G.rfsuite.msp` 可用（RFSuite 的 runtime 已被拉起）
+
+`main.lua` 的 `profileRf2()` 探测不到 rf2 时会回头再调一次 `install()`，所以 RFSuite 比本
+widget 起得晚也能接上。
+
+### 用法与红线
+
+- 装了 RFSuite 之后，**必须启用 RFSuite Service widget**（或 RFSuite 仪表盘 widget）放在某个
+  屏的小区域里。RFSuite 的连接、CRSF 传感器、MSP 泵只有它活着才跑；没有它，`rfsuite.msp`
+  不存在，本脚本的电池面板会退回 `RF TOOL 2.3 REQUIRED`。
+- **不要同时启用 RfTool widget。** 两套后台会抢同一个 `crossfireTelemetryPush` 槽。想用
+  RFSuite 就把 RfTool widget 从屏幕上撤掉（文件留着不影响）。
+- `SCRIPTS/RF2`、`WIDGETS/RfTool` 不用删，留着方便回退：把 RFSuite Service 撤掉、RfTool
+  widget 装回去，AK7HUD 立刻回到原来的路径。
+
+### 数据映射
+
+| AK7HUD 拿到的 | RFSuite 侧 |
+|---|---|
+| `mspQueue:add(message)` | `client:request{command, payload, onReply, onError}` |
+| `message.processReply(self, buf)` | `onReply(buf)`，buf 是 1-based 字节数组 |
+| `message.retryDelay`（1/10 s） | `timeout`（秒） |
+| `useApi("mspBatteryConfig")` | 复用 `rfsuite-core/tasks/msp/api/battery_config.lua` 的 `parse` |
+| `status.armingDisableFlags` | `arming_disable_flags`（snake→camel） |
+| `stats.stats_total_flights.value` | `flightcount` |
+
+RFSuite 的 `battery_config.lua` 原生认 81 字节布局（含每 profile 节数），所以第 6 版固件
+那份 81 字节回复不用本脚本自己判长度。
+
+> **状态：代码已通过 Lua 语法检查，尚未在实机验证。** 首次使用请在地面完成一次
+> 「读节数 → 改成相邻值 → 确认飞控真的变了 → 改回来」，再上电飞行。
+
+

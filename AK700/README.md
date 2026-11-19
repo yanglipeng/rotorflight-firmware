@@ -35,7 +35,9 @@
 | `config/AK700_cli_diff_all_20261102.txt` | 7 200 B | 旧版（2026-11-02），仅留档 |
 
 > `AK7HUD/` 是配套的**遥控器主屏 widget**（从 KSE4 fork，治自动弹面板 / 地面震动 / 电池节数），
-> 单独说明见 `AK7HUD/README.md`。
+> 单独说明见 `AK7HUD/README.md`。目录内容：`main.lua`、`cellcount.lua`、
+> `rfsuite_bridge.lua`（RFSuite 桥接层，2026-11-19 新增）、
+> `BatterySounds/txbatlow.wav`（2S 遥控器低电量提示音，2026-11-19 补入仓库）。
 
 **各 hex 的差别**：`20261023` 是飞机最初的原样镜像；`20261102` / `20261103` / `20261105` / `20261106` / `20261109`
 都是本仓库重编，只差编译日期串与所含修复：`20261103` 带电池刷新，`20261105` 再叠加定速器恢复修复，
@@ -70,7 +72,36 @@ D21E7729B0E09E29D63D1F503C8B3FEFA3C6EB644A8D1F16F312D8C588EB1E87  config/AK700_c
 C8584E6F34120BEDCB5B9EE13B1B4506678FED5255CDA784F9EFBF28E2E32DB9  config/AK700_cli_restore_20261102.txt
 ```
 
+遥控器脚本 `AK7HUD/`（2026-11-19 版，Release 里的 `AK7HUD-20261119.zip` 即这四份）：
+
+```
+221962D9FCA84BCCF0C75FC44F21423838EE11E5B20DCF9402595732F309E7FF  AK700/AK7HUD/main.lua
+6D3ABA778B1C84F9515F31768ACAEECEC508A768721E619E621E08297A402692  AK700/AK7HUD/cellcount.lua
+17BB62D38B762D3133275A234D64831319DB251ADCE60E3C36E476E4092DE34D  AK700/AK7HUD/rfsuite_bridge.lua
+74DA2F72879FAFB2119A9019FB1FD5A6FE5F140F8C9A8496CBDFE613697FCA67  AK700/AK7HUD/BatterySounds/txbatlow.wav
+```
+
 ## 二之二、版本更新记录
+
+### 2026-11-20：正式发布 4.7.0（Release `ak700-4.7.0-20261119`）+ AK7HUD 支持 RFSuite
+
+4.7.0 固件本身与 2026-11-19 刷入飞机的那份**逐字节相同**（hex SHA256 `7D4BC294…B5A6F`），
+本次只是正式发版（tag / Release），并补上一直缺失的遥控器脚本资产与文档：
+
+- **AK7HUD 新增 `rfsuite_bridge.lua`**：官方新架构 RFSuite 不提供 `rf2` 全局，但把 MSP 请求面发布为
+  `rfsuite.msp`。桥接层在「`_G.rf2` 不存在 且 `rfsuite.msp` 可用」时构造一个 `rf2` 兼容对象
+  （`mspQueue:add` → `client:request`、`useApi` 复用 RFSuite 的 API `parse`），任一条件不满足就完全不动，
+  RF Tool 2.3.x 路径逐字未改。`main.lua` 只有两处钩子：顶部优先加载桥接层、`profileRf2()` 探测不到
+  `rf2` 时回调一次 `install()`（应付 RFSuite runtime 起得比 widget 晚）。
+- **补入 `AK7HUD/BatterySounds/txbatlow.wav`**：此前 README 第 128 行引用了它，但文件从没进过仓库，
+  新克隆/新 Release 会缺这个音效。
+- **AK7HUD 版本表、文件清单、SHA256** 已同步（见上）。
+
+校验：4 个 Lua 文件 `luac -p` 全部通过；**未上遥控器实机验证**（需要在遥控器上启用 RFSuite Service widget，
+再测电池面板读/写节数；同时**必须撤掉 RfTool widget**，两套后台会抢同一个 `crossfireTelemetryPush` 槽）。
+
+发布资产：4.7.0 hex、刷前整片 512 KB 备份、`AK700_cli_diff_all_20261119.txt`、
+`AK700_cli_restore_4.7.0.txt`、`AK7HUD-20261119.zip`、`AK700-release-20261119.zip`。
 
 ### 2026-11-19：升级到 Rotorflight 4.7.0（合并上游 29 个提交）
 
@@ -101,6 +132,10 @@ C8584E6F34120BEDCB5B9EE13B1B4506678FED5255CDA784F9EFBF28E2E32DB9  config/AK700_c
 迁移文件 `config/AK700_cli_restore_4.7.0.txt`（5 个电池项改成 6 元数组，其余 290 行逐字未动）。
 
 **Flash**：488 516 B / 491 520 B，余 **3 004 B**（比 4.6.0 的 1 420 B 更宽裕）。
+
+> **状态（2026-11-20）**：已刷入飞机并验证启动、custom defaults 与参数迁移（183 行逐行一致、
+> 154 次飞行统计完好）；**尚未飞行验证** —— 地面测试（拆桨：节数识别、定速器起转/切档/超速、救机总距限幅、
+> 低压门限）仍待做。首次飞行前请按旧版流程做台架检查。
 
 > ⚠️ **刷机事故复盘（2026-11-19）**：第一次刷 4.7.0 时把 `.hex` 直接传给
 > `dfu-util -D`（dfu-util 不支持 Intel HEX），地址算到 `0x08151493` 越界，设备进入

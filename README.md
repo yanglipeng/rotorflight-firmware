@@ -14,6 +14,9 @@ MSP API **12.10**）为基础合并，并在其上保留本地几处修复（定
 | 配套地面站 | 需 **4.7 代** Rotorflight Configurator（API 12.10；旧版会提示版本不支持） |
 | Flash 占用 | 488 516 B / 491 520 B，余 **3 004 B** |
 
+> ⚠️ **4.7.0 发版状态（2026-11-20）**：已刷入飞机并验证启动、custom defaults、参数迁移
+> （183 行逐行一致、154 次飞行统计完好）；**尚未飞行验证** —— 首次飞行前先做拆桨地面测试。
+
 > 上游说明文档保留在 [README-upstream.md](README-upstream.md)。
 
 ## 直接下载
@@ -31,6 +34,7 @@ MSP API **12.10**）为基础合并，并在其上保留本地几处修复（定
 | [`AK700/firmware/AK700_firmware_4.6.0_20261023.hex`](AK700/firmware/AK700_firmware_4.6.0_20261023.hex) | 飞机最初那一版的原样镜像（从飞控 DFU 整片读出） |
 | [`AK700/firmware/AK700_flash_full_512k_20261109.bin`](AK700/firmware/AK700_flash_full_512k_20261109.bin) | 2026-11-09 整片备份（11-07 固件 + 当日参数 + 统计） |
 | [`AK700/firmware/AK700_config_sector_16k.bin`](AK700/firmware/AK700_config_sector_16k.bin) | 参数区 16 KB 备份（`0x08004000–0x08007FFF`，2026-11-09 状态） |
+| [`AK700/AK7HUD/`](AK700/AK7HUD/README.md) | 遥控器主屏 widget（4.7.0 / MSP API 12.10 可用；新增 RFSuite 桥接 `rfsuite_bridge.lua`）。Release 里另有打包好的 `AK7HUD-20261119.zip` |
 
 > **刷 4.7.0 前必读**：[AK700/UPGRADE-4.7.0.md](AK700/UPGRADE-4.7.0.md) —— 含参数迁移、刷机安全流程、
 > 以及 2026-11-19 那次 `dfu-util` 静默失败（固件未落盘导致 USB 不枚举）的完整复盘。
@@ -129,6 +133,23 @@ git log -1 --stat
 git diff be6a67f HEAD -- src/main/flight/
 git log --oneline be6a67f..HEAD -- src/main/    # 上游 29 个提交
 ```
+
+## 发布（Release）
+
+| tag | 内容 |
+| --- | --- |
+| [`ak700-4.7.0-20261119`](https://github.com/yanglipeng/rotorflight-firmware/releases/tag/ak700-4.7.0-20261119)（Latest） | 4.7.0 固件 + 刷前整片 512 KB 备份 + `diff all` / restore 参数文件 + `AK7HUD-20261119.zip` + 全量打包 |
+| `ak700-4.6.0-20261109` / `-20261106` / `-20261105` / `-20261103` / `-20261102` | 4.6.0 各版本（回退用） |
+
+## 遥控器脚本（AK7HUD）
+
+`AK700/AK7HUD/` 是配套的主屏 widget（从 KSE4 fork），**4.7.0 / MSP API 12.10 可直接用**。
+2026-11-19 新增 `rfsuite_bridge.lua`：装上官方 **RFSuite** 也能用 —— 探测不到 `rf2` 时用 `rfsuite.msp`
+构造兼容对象接管 MSP，RF Tool 在场时桥接层完全不生效，两条路径互不干扰。
+
+> **RFSuite 与 RF Tool 只能启用一套**（`crossfireTelemetryPush` 只有一个发送槽，两套后台会互相丢包）。
+> 用 RFSuite 时必须启用 RFSuite Service widget（连接 / 传感器 / MSP 泵都靠它）。
+> 详见 [AK700/AK7HUD/README.md](AK700/AK7HUD/README.md) 第十二、十三节。
 
 ## 编译
 
