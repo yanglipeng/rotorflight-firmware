@@ -2,7 +2,7 @@
 
 > 编写日期：2026-11-19
 > 基准：飞机实读参数（`AK700_cli_diff_all_20261119.txt`，固件 4.6.0 Nov 10 2026 / MSP API 12.9）
-> 目标分支：`ak700-4.6.0` 合入上游 `master`（4.7.0 / MSP API 12.10）
+> 目标分支：`ak700-4.6.0` 合入上游 `master`（4.7.0 / MSP API 12.10）；**实际在 `ak700-4.7.0` 上完成**（见第 3 节）
 
 ---
 
@@ -93,6 +93,9 @@ set vbat_warning_cell_voltage = 345
 
 生成的 hex 最高地址 `0x0807F434`，到 `0x08080000` 正好 3,020 B，与链接器统计一致。
 
+> 注：以上是合并当天的构建统计。最终**发布 / 刷入版**为 `488 516 B / 余 3 004 B`（差 16 B，
+> 来自版本串与最后重编），见第 0 节与 `AK700/README.md` 的 SHA256 表。
+
 > 3 KB 余量对"以后还要继续加功能"仍然偏紧。真要再扩展，裁剪顺序（从安全到激进，改
 > `src/main/target/STM32_UNIFIED/target.h` 末尾，集中写成一段 `#undef` 便于以后合并）：
 >
@@ -110,17 +113,18 @@ set vbat_warning_cell_voltage = 345
 
 ## 3. 合并步骤
 
-> **这一节已经执行完毕。** 合并结果在分支 `merge/upstream-4.7.0`（commit `86e6930`，双父提交：
-> 本地 `800d514`（含 11-10 未提交改动的临时快照）+ 上游 `3bc524d`），并且在 `/c/tmp/rf-merge`
-> 工作树里编译通过。下面保留原始步骤，供复核或重做时对照。
+> **这一节已经执行完毕。** 合并结果在分支 `ak700-4.7.0`：合并提交 `86e6930`（双父：本地 `800d514`
+> 含 11-10 的改动快照 + 上游 `3bc524d`），随后 `f39ea06`（cell count 补丁）与 `512d328`（刷机 + 发布）；
+> 当前 HEAD `d6165dc`（+ AK7HUD RFSuite 桥接）。临时 worktree `/c/tmp/rf-merge` 已于 2026-11-20 删除，
+> 之后直接在仓库主目录构建。下面保留原始步骤，供复核或重做时对照。
 
 ### 3.1 准备
 
 ```bash
 cd /c/project/rotorflight-firmware
-git switch -c merge/upstream-4.7.0 ak700-4.6.0
-git stash push -u -m "wip 2026-11-10"     # 未提交的电池解析重写 + AK7HUD 改动
-git merge master
+git switch -c ak700-4.7.0 ak700-4.6.0
+git add -A && git commit -m "TEMP: wip 2026-11-10"   # 实际得到 800d514
+git merge master                                     # 实际得到 86e6930
 ```
 
 ### 3.2 冲突一：`README.md`（3 块，纯文字）
@@ -265,9 +269,13 @@ set bat_capacity = 5000,5000,0,0,0,0
    - 参数区 16 KB 一份（可选，反正 4.7.0 用不上，只为留档）
    - 本次实读的 `diff all` 已存 `AK700_cli_diff_all_20261119.txt`
    - 遥控器 SD 卡的 `WIDGETS/AK7HUD/*.cfg` 与 `cells_log.txt`
-2. 刷已编好的 `downloads/rotorflight_4.7.0_STM32F7X2_merge-4.7.0_20261119.hex`
-   （`dfu-util -a 0 -d 0483:df11 -s 0x08000000:leave -D <该文件>`；
-   只写固件区，不碰 `0x08004000` 起的 16 KB 配置区。若想自己重编：`downloads/build.ps1 TARGET=STM32F7X2 -j`）
+2. 刷**已补齐 custom defaults** 的发布版 `AK700/firmware/AK700_firmware_4.7.0_20261119.hex`
+   （地面站「固件烧写」直接选它最省事；或按第 0 节拼成单个 512 KB 镜像后 `dfu-util -D` 一次写入，
+   只写固件区，不碰 `0x08004000` 起的 16 KB 配置区）。
+   **不要直接刷** `downloads/rotorflight_4.7.0_STM32F7X2_merge-4.7.0_20261119.hex` —— 那是合并后
+   未经补齐的构建产物，**缺板级 custom defaults**，只用于核对与 MD5 对照。
+   若想自己重编：`downloads/build.ps1 TARGET=STM32F7X2 -j`（工具链在 `%USERPROFILE%\.dsh\toolchains`，
+   见 `AGENTS.md` 的 Build 一节）
 3. 首次上电后进 CLI，敲 `version`，应显示 `4.7.0 ... MSP API: 12.10`
 4. 粘贴 `AK700_cli_restore_4.7.0.txt` 全文 → 自动 `save` → **拔插一次 USB**
 5. 再进 CLI 核对：
@@ -313,18 +321,20 @@ dfu-util -a 0 -d 0483:df11 -s 0x08000000:0x80000:leave -D AK700_flash_full_512k_
 
 ---
 
-## 8. 未验证项与风险
+## 8. 验证状态与风险
 
-1. **已编译验证（2026-11-19）**：本机工具链在 `downloads/`（xpack GCC 12.2.1 + mingw32-make），
-   `downloads/build.ps1` 就是构建入口。合并后的树已编过，0 error，hex 已生成：
-   `downloads/rotorflight_4.7.0_STM32F7X2_merge-4.7.0_20261119.hex`（1.38 MB，MD5 `7bc441fc…`）。
-   仍然**没有上电验证**——地面测试清单见第 6 节。
+1. **构建与刷入状态**：工具链在 `%USERPROFILE%\.dsh\toolchains\`（xpack GCC 12.2.1 + mingw32-make，
+   2026-11-20 从仓库 `downloads/` 移出），入口 `downloads/build.ps1`。合并树编译 0 error；2026-11-20
+   从当前 HEAD 重编通过（`obj/rotorflight_4.7.0_STM32F7X2.hex`）。**已刷入并验证启动**（2026-11-19，
+   版本行 `4.7.0 Nov 19 2026 / 16:27:30 · MSP API 12.10`，custom defaults 生效、参数 183 行逐行一致、
+   154 次飞行统计完好）；**仍未飞行验证**——首次飞行前的拆桨地面测试清单见第 6 节。
 2. **配置器版本**：API 12.10 需要 4.7 代的 Rotorflight Configurator，旧版会提示版本不支持。
-3. **KSE4 / AK7HUD 的 API 门槛**：`main.lua` 里三处 `FC.mspApiMin` 比较，需确认放行 12.10。
+3. **KSE4 / AK7HUD 的 API 门槛（已确认）**：脚本只有 `>= 12.09` 的下限判断，12.10 直接通过；
+   2026-11-19 又补了 RFSuite 桥接（`rfsuite_bridge.lua`），见 `AK700/AK7HUD/README.md` 第十二、十三节。
 4. **统一目标的行为变化**：`#514` 关掉 GHOST / PPM / PARALLEL_PWM，`#492` 全局关掉 CMS。
    你走 CRSF + 遥控器 HUD，理论上无影响，但 CMS 没了意味着 OSD 菜单调参这条路彻底不通。
-5. **文档要同步**：`AK700/README.md`、`AK7HUD/README.md`、`cellcount.lua` 里共 18 处写死
-   `4.6.0`；hex 命名与 `ak700-4.6.0-*` 这批 tag 也要跟着换到 4.7.0。
+5. **文档与发布（已完成）**：`AK700/README.md`、`AK700/AK7HUD/README.md` 已同步到 4.7.0 / MSP API 12.10；
+   tag `ak700-4.7.0-20261119` 与 Release（6 个资产）已于 2026-11-20 发布。
 6. **PID 手感会变**：#538 引入 master gain（默认 100 = 等同原行为），但 `pid.c` 内部重构过，
    升级后第一次悬停建议按新机首飞对待，先看 30 秒振动与转速保持。
 

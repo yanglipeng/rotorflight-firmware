@@ -166,6 +166,10 @@ make TARGET=STM32F7X2 \
 
 产物：`obj/rotorflight_4.7.0_STM32F7X2.hex`。
 
+> 本机（Windows）的现成入口是 `downloads\build.ps1 TARGET=STM32F7X2`：它自己把工具链拼进 PATH，工具链放在
+> `%USERPROFILE%\.dsh\toolchains`（`rotorflight-firmware-build` skill 的 `get-toolchain.ps1` 安装到这里）。
+> `downloads\`、`logs\`、`obj\`、`make\local.mk` 都是本地目录，不跟踪。
+
 > ⚠️ **编出来的 hex 不含 custom defaults！** 板级资源映射（BEEPER / MOTOR / SERVO / SPI / ADC /
 > timer / dma / 陀螺仪 / 串口）存在独立的 `0x08002808–0x08003FFF` 区，由链接脚本预留位置但**不在 hex 里**。
 > 直接刷这个 hex，飞控会报 `###WARNING: NO CUSTOM DEFAULTS FOUND###`，板级映射全部缺失。
