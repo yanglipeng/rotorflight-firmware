@@ -999,21 +999,47 @@ local function getTxVolt()
   F.txVolt = v
   return v
 end
--- TX battery display endpoints for a 2S pack. Keep these separate from the
--- model battery settings: the top-bar gauge represents the radio battery.
-local TX_LIPO_EMPTY_V = 7.0   -- 3.50 V/cell
-local TX_LIPO_FULL_V  = 8.4   -- 4.20 V/cell
-local TX_LIION_EMPTY_V = 6.2  -- 3.10 V/cell
-local TX_LIION_FULL_V  = 8.4  -- 4.20 V/cell
+-- TX (radio) 2S pack: standard LiPo / Li-Ion state-of-charge table
+-- (3.90 V/cell =~ 56 %), so the bar follows remaining energy, not voltage span.
+local TX_LIPO_CURVE = {
+  { 8.40, 100 }, { 8.30, 95 }, { 8.20, 88 }, { 8.10, 80 },
+  { 8.00, 72 },  { 7.90, 64 }, { 7.80, 56 }, { 7.70, 48 },
+  { 7.60, 40 },  { 7.50, 32 }, { 7.40, 24 }, { 7.30, 16 },
+  { 7.20, 8 },   { 7.10, 3 },  { 7.00, 0 },
+}
+local TX_LIION_CURVE = {
+  { 8.40, 100 }, { 8.30, 96 }, { 8.20, 90 }, { 8.10, 83 },
+  { 8.00, 75 },  { 7.90, 68 }, { 7.80, 60 }, { 7.70, 53 },
+  { 7.60, 45 },  { 7.50, 38 }, { 7.40, 30 }, { 7.30, 23 },
+  { 7.20, 16 },  { 7.10, 9 },  { 7.00, 4 },  { 6.80, 0 },
+}
+-- Colour bands (whole pack): green = fine, yellow = charge soon, red = charge now
+local TX_LIPO_GREEN_V,  TX_LIPO_YELLOW_V  = 7.55, 7.35
+local TX_LIION_GREEN_V, TX_LIION_YELLOW_V = 7.25, 7.00
 
 local function txPctFromVolts(volts, isLiIon)
   if not volts or volts <= 0 then return nil end
-  local emptyV = isLiIon and TX_LIION_EMPTY_V or TX_LIPO_EMPTY_V
-  local fullV = isLiIon and TX_LIION_FULL_V or TX_LIPO_FULL_V
-  local pct = ((volts - emptyV) / (fullV - emptyV)) * 100
-  if pct < 0 then pct = 0 end
-  if pct > 100 then pct = 100 end
-  return pct
+  local curve = isLiIon and TX_LIION_CURVE or TX_LIPO_CURVE
+  if volts >= curve[1][1] then return 100 end
+  for i = 2, #curve do
+    local hiV, hiP = curve[i - 1][1], curve[i - 1][2]
+    local loV, loP = curve[i][1], curve[i][2]
+    if volts >= loV then
+      local t = (volts - loV) / (hiV - loV)
+      return loP + t * (hiP - loP)
+    end
+  end
+  return 0
+end
+local function fmtTxVolts(volts)
+  if not volts or volts <= 0 then return "" end
+  -- EdgeTX usually reports tx-voltage at 0.1 V resolution; only show the extra
+  -- digit when the sensor really provides it.
+  local tenths = math.floor(volts * 10 + 0.5)
+  if math.abs(volts * 10 - tenths) < 0.06 then
+    return string.format("%.1fV", volts)
+  end
+  return string.format("%.2fV", volts)
 end
 local function signalPercent(raw)
   local v = tonumber(raw)
@@ -2787,12 +2813,15 @@ local function batColor(pct)
   if pct >= 20 then return C_YELLOW end
   return C_RED
 end
-local function txBatColor(pct)
-  -- Classify the estimated whole percentage so floating-point rounding at the
-  -- voltage boundaries cannot turn an exact 50% green or an exact 30% yellow.
-  local wholePct = math.floor((pct or 0) + 0.5)
-  if wholePct >= 51 then return C_GREEN end
-  if wholePct >= 31 then return C_YELLOW end
+local function txBatColor(volts, isLiIon)
+  -- Colour by pack voltage, not by the estimated percentage: the voltage curve
+  -- is flat, so a percentage threshold would turn yellow far too early (and it
+  -- made a healthy 2S pack look empty).
+  if not volts or volts <= 0 then return C_DIM end
+  local greenV = isLiIon and TX_LIION_GREEN_V or TX_LIPO_GREEN_V
+  local yellowV = isLiIon and TX_LIION_YELLOW_V or TX_LIPO_YELLOW_V
+  if volts >= greenV then return C_GREEN end
+  if volts >= yellowV then return C_YELLOW end
   return C_RED
 end
 local function cellVoltageColor(sessionMin)
@@ -2964,6 +2993,12 @@ local function buildHero()
   local title = G.compact and "HEADSPEED" or "HEADSPEED RPM"
   newLabel(hb.x + G.x(14), hb.y + G.y(3), G.x(285),
            title, G.fontSmall, C_DIM)
+  -- AK7HUD: radio (TX) battery voltage, right aligned on the caption row.
+  -- The top-bar gauge is only ~11 px wide on a 480 screen, so the actual number
+  -- belongs here where there is room for it.
+  V.txVolts = newLabel(hb.x, hb.y + G.y(3),
+                       math.max(1, hb.w - G.x(6)), "",
+                       G.fontSmall, C_DIM, RIGHT)
   local rpmW = G.compact and G.x(250) or G.x(230)
   local rpmY = hb.y + G.y(42)
   -- This optical correction is for TX16S MKII's exact 480x272 layout only.
@@ -3295,18 +3330,41 @@ local function updateUiState()
     profilesReady and string.format("Profile %d / Rate %d",
       pidProfile, rateProfile) or "", C_TEXT)
 
-  local txPct = txPctFromVolts(getTxVolt(), txIsLiIon)
+  local txVolts = getTxVolt()
+  -- Smooth the radio-pack voltage: tx-voltage jitters ~0.1-0.2 V with backlight,
+  -- audio and RF load, which made the number and the bar flicker.
+  if txVolts and txVolts > 0 then
+    local f = A.txVoltFiltered
+    f = f and (f + (txVolts - f) * 0.20) or txVolts
+    A.txVoltFiltered = f
+    txVolts = f
+  else
+    A.txVoltFiltered = nil
+    A.txPctShown = nil
+  end
+  local txPct = txPctFromVolts(txVolts, txIsLiIon)
+  -- Move the bar/percentage only when the estimate changes by >= 2 points.
+  local shownPct = A.txPctShown
+  if txPct and shownPct and math.abs(txPct - shownPct) < 2.0 then
+    txPct = shownPct
+  elseif txPct then
+    A.txPctShown = txPct
+  end
   if txPct then
     local fillH = math.floor((V.txBodyH - V.txInsetY * 2) * txPct / 100)
     local fillY = V.txBodyY + V.txBodyH - V.txInsetY - fillH
     setObject(V.txFill, { y=fillY,
                           w=math.max(1, V.txBodyW - V.txInsetX * 2),
                           h=math.max(1, fillH),
-                          color=txBatColor(txPct) })
+                          color=txBatColor(txVolts, txIsLiIon) })
     setVisible(V.txFill, fillH > 0)
   else
     setVisible(V.txFill, false)
   end
+  -- AK7HUD: radio battery voltage (+ the calibrated percentage) on the caption row.
+  local txLabel = (txVolts and txVolts > 0) and ("TX " .. fmtTxVolts(txVolts)) or ""
+  if txPct then txLabel = txLabel .. string.format(" %d%%", math.floor(txPct + 0.5)) end
+  setLabel(V.txVolts, txLabel, txBatColor(txVolts, txIsLiIon))
 
   local flightText, flightColor
   if OPT.flightCounter == FC.ROTORFLIGHT then
@@ -3441,6 +3499,11 @@ local PROFILE_SELECT_TIMEOUT = 2000
 local PROFILE_ACTIVE_CAPACITY_TIMEOUT = 300
 local PROFILE_SNAPSHOT_ACTIVE_TIMEOUT = 500
 local PROFILE_SNAPSHOT_CAPACITY_TIMEOUT = 1200
+-- Minimum gap between two battery-profile snapshots (reads of MSP 175/32).
+-- AK7HUD: without this a flapping RF Tool link re-ran the snapshot on every
+-- reconnect, which showed up as the battery configuration being refreshed
+-- over and over during a flight.
+local PROFILE_SNAPSHOT_COOL_MS = 1000          -- 10 s (centiseconds)
 local PROFILE_FLIGHT_STATS_TIMEOUT = 200
 
 local function profileNow()
@@ -4283,6 +4346,7 @@ local function profileFinishSnapshotIfReady(wgt, token)
   wgt.profilePending = nil
   wgt.profileInitialReadFinished = true
   wgt.profileCapacityReadFinished = true
+  wgt.profileSnapshotCoolUntil = profileNow() + PROFILE_SNAPSHOT_COOL_MS
   if wgt.profileCapacitiesReady then
     local summary = {}
     for i = 1, BATTERY_PROFILE_COUNT do
@@ -4581,10 +4645,10 @@ local function profileStopCapacityRead(wgt)
   return true
 end
 
-local function profileSwitchUnsafe(wgt)
-  if wgt and wgt.profileRfState == "armed" then
-    return true, "DISARM TO CHANGE PROFILE"
-  end
+-- Telemetry-only "is the aircraft busy" check.  Used for the profile/cell
+-- menus and for gating battery config traffic (MSP 32/33/130/250) and SD
+-- writes so nothing touches the battery configuration while airborne.
+local function profileTelemetryUnsafe()
   local armRaw, armCurrent = get("ARM")
   local arm = tonumber(armRaw)
   -- Explicit unsafe telemetry blocks the change; a missing sensor does not
@@ -4601,6 +4665,13 @@ local function profileSwitchUnsafe(wgt)
     return true, "STOP ROTOR TO CHANGE PROFILE"
   end
   return false, nil
+end
+
+local function profileSwitchUnsafe(wgt)
+  if wgt and wgt.profileRfState == "armed" then
+    return true, "DISARM TO CHANGE PROFILE"
+  end
+  return profileTelemetryUnsafe()
 end
 
 local closeBatteryProfileMenu
@@ -5109,6 +5180,13 @@ local function akCellsEnsure()
     setMessage = profileSetMessage,
     setNotice = profileSetNotice,
     unsafe = profileSwitchUnsafe,
+    -- AK7HUD: the cellcount add-on must not write its diagnostic log to the
+    -- SD card while the rotor is turning (it used to rewrite the whole file
+    -- every 4 s, in flight too).
+    logAllowed = function()
+      local unsafe = profileTelemetryUnsafe()
+      return unsafe ~= true
+    end,
     now = profileNow,
     modelName = getModelName,
     voltageMv = function() return (tonumber(D.voltage) or 0) * 1000 end,
@@ -5209,7 +5287,8 @@ local function serviceBatteryProfileFeature(wgt, allowUi, event, touchState)
     local unsafe, unsafeMessage = profileSwitchUnsafe(wgt)
     local transportReady = profileTransport() ~= nil
     local connectionSettled = now >= (wgt.profileConnectReadyAt or now)
-    if transportReady and connectionSettled and not unsafe
+    local snapshotCooled = now >= (wgt.profileSnapshotCoolUntil or 0)
+    if transportReady and connectionSettled and snapshotCooled and not unsafe
        and not wgt.profileInitialReadRequested
        and not wgt.profileCapacityReadRequested and not wgt.profileBusy then
       profileBeginSnapshot(wgt)

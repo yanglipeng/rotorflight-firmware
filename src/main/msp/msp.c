@@ -895,7 +895,9 @@ static bool mspCommonProcessOutCommand(int16_t cmdMSP, sbuf_t *dst, mspPostProce
 
     case MSP_BATTERY_CONFIG:
         sbufWriteU16(dst, getBatteryCapacity()); // Return the active battery capacity
-        sbufWriteU8(dst, batteryConfig()->batteryCellCount);
+        // Return the count that is actually applied (auto-detected or manual);
+        // the configured value is only a fallback used when no pack is present.
+        sbufWriteU8(dst, getBatteryCellCount() ? getBatteryCellCount() : batteryConfig()->batteryCellCount);
         sbufWriteU8(dst, batteryConfig()->voltageMeterSource);
         sbufWriteU8(dst, batteryConfig()->currentMeterSource);
         sbufWriteU16(dst, batteryConfig()->vbatmincellvoltage);

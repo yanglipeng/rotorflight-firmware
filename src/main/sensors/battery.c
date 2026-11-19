@@ -312,56 +312,129 @@ static bool isVoltageFromBat(void)
             || voltage > batteryConfig()->vbatnotpresentcellvoltage * 2;  // USB voltage - 2s or more check
 }
 
-static void batteryApplyCellCount(void)
+// ---------------------------------------------------------------------------
+// Cell count resolution (reworked 2026-11-10)
+//
+// Rules:
+//   * while ARMED the applied cell count never changes (auto detection is
+//     skipped by batteryUpdatePresence, and manual writes are refused);
+//   * while disarmed the count is detected from the pack voltage even when
+//     battery_cell_count is set manually - the config value is only a hint
+//     for the case where detection cannot decide;
+//   * a manual write while disarmed wins for the rest of the power cycle
+//     (batteryCellCountLocked), writing 0 releases the lock and re-enables
+//     auto detection;
+//   * detection prefers the 3.80-4.20 V/cell window a charged pack is plugged
+//     at, split into three sub-bands (>=4.05, 3.91-4.05, 3.80-3.91 V/cell).
+//     Within a sub-band the series counts are mutually exclusive, and the
+//     sub-bands are tried from the highest cell voltage down, so a pack the
+//     aircraft is normally flown with is resolved unambiguously;
+//   * a pack below 3.80 V/cell falls back to the closest match over the full
+//     LVC window (guessing, as before).
+// ---------------------------------------------------------------------------
+
+// BEGIN CELL_DETECT
+
+typedef struct
 {
-    if (batteryConfig()->batteryCellCount != 0) {
-        batteryCellCount = batteryConfig()->batteryCellCount;
-    }
-    else {
-        // Auto-detect, two stages.
-        //
-        // Stage 1 uses a narrow, fixed window (3.91-4.20 V/cell) that makes
-        // every series count this aircraft uses mutually exclusive, because
-        //   13 * 4.20 = 54.60 V  <  14 * 3.91 = 54.74 V
-        // A fresh pack (above ~78% charge) is therefore detected unambiguously.
-        //
-        // Stage 2 widens the window to the configured LVC limits for a
-        // discharged pack.  Overlapping counts can only be guessed there,
-        // which is exactly why the radio offers manual confirmation.
-        //
-        // 9 and 11 stay absent on purpose: including them makes a partially
-        // discharged 12S read as 11S.
-#define BATTERY_DETECT_CELL_MIN 391   // 3.91 V/cell
-#define BATTERY_DETECT_CELL_MAX 420   // 4.20 V/cell
-        static const unsigned auto_cells[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14 };
-        unsigned voltage = getBatteryVoltage();
-        bool found = false;
+    uint16_t lo;
+    uint16_t hi;
+} cellDetectBand_t;
 
-        batteryCellCount = 1;
-        for (unsigned index = 0; index < ARRAYLEN(auto_cells); index++) {
-            if (voltage >= auto_cells[index] * BATTERY_DETECT_CELL_MIN &&
-                voltage <= auto_cells[index] * BATTERY_DETECT_CELL_MAX) {
-                batteryCellCount = auto_cells[index];
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            for (unsigned index = 0; index < ARRAYLEN(auto_cells); index++) {
-                if (voltage >= auto_cells[index] * batteryConfig()->vbatmincellvoltage &&
-                    voltage <= auto_cells[index] * batteryConfig()->vbatmaxcellvoltage) {
-                    batteryCellCount = auto_cells[index];
-                    break;
-                }
+// Tried in order; values are in 10 mV (centivolts per cell).
+//
+// The bands are chosen so that the series counts stay mutually exclusive:
+//   13 * 4.20 = 54.60 V  <  14 * 3.91 = 54.74 V
+//   12 * 4.20 = 50.40 V  <  13 * 3.91 = 50.83 V
+// so anything at 3.91 V/cell or above is resolved exactly.  A pack between
+// 3.80 and 3.91 V/cell is physically ambiguous (a 13S at 3.85 V/cell is the
+// same voltage as a 12S at 4.17 V/cell); it is read as the count that gives
+// the higher per-cell voltage, i.e. a charged pack.
+static const cellDetectBand_t cellDetectBands[] = {
+    { 405, 420 },   // freshly charged
+    { 391, 405 },   // partly used
+    { 380, 391 },   // nearly storage voltage
+};
+
+// 9 and 11 stay absent on purpose: including them makes a partially
+// discharged 12S read as 11S.
+static const uint8_t cellDetectCounts[] = { 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13, 14 };
+
+static uint8_t batteryDetectCellCount(uint16_t voltage)
+{
+    for (unsigned band = 0; band < ARRAYLEN(cellDetectBands); band++) {
+        for (unsigned index = 0; index < ARRAYLEN(cellDetectCounts); index++) {
+            const uint32_t cells = cellDetectCounts[index];
+            if (voltage >= cells * cellDetectBands[band].lo &&
+                voltage <= cells * cellDetectBands[band].hi) {
+                return cellDetectCounts[index];
             }
         }
     }
+    return 0;
+}
 
+static uint8_t batteryGuessCellCount(uint16_t voltage)
+{
+    uint8_t best = 0;
+    uint32_t bestDelta = UINT32_MAX;
+
+    for (unsigned index = 0; index < ARRAYLEN(cellDetectCounts); index++) {
+        const uint32_t cells = cellDetectCounts[index];
+        if (voltage < cells * (uint32_t)batteryConfig()->vbatmincellvoltage ||
+            voltage > cells * (uint32_t)batteryConfig()->vbatmaxcellvoltage) {
+            continue;
+        }
+        const uint32_t perCell = voltage / cells;
+        const uint32_t delta = (perCell > 370) ? (perCell - 370) : (370 - perCell);
+        if (delta < bestDelta) {
+            bestDelta = delta;
+            best = cellDetectCounts[index];
+        }
+    }
+    return best;
+}
+
+// Set once the pilot writes a cell count while disarmed; cleared by a power
+// cycle or by writing 0.
+static bool batteryCellCountLocked;
+
+static void batteryUpdateCellThresholds(void)
+{
     batteryWarningVoltage = batteryCellCount * batteryConfig()->vbatwarningcellvoltage;
     batteryCriticalVoltage = batteryCellCount * batteryConfig()->vbatmincellvoltage;
     batteryWarningHysteresisVoltage = (batteryWarningVoltage > batteryConfig()->vbathysteresis) ? batteryWarningVoltage - batteryConfig()->vbathysteresis : 0;
     batteryCriticalHysteresisVoltage = (batteryCriticalVoltage > batteryConfig()->vbathysteresis) ? batteryCriticalVoltage - batteryConfig()->vbathysteresis : 0;
 }
+
+static void batteryApplyCellCount(void)
+{
+    if (batteryCellCountLocked) {
+        // The pilot's value for this power cycle, nothing may override it.
+        if (batteryConfig()->batteryCellCount != 0) {
+            batteryCellCount = batteryConfig()->batteryCellCount;
+        }
+    }
+    else {
+        const uint16_t voltage = getBatteryVoltage();
+        uint8_t cells = batteryDetectCellCount(voltage);
+
+        if (cells == 0) {
+            cells = batteryGuessCellCount(voltage);
+        }
+        if (cells == 0) {
+            cells = batteryConfig()->batteryCellCount;
+        }
+        if (cells == 0) {
+            cells = batteryCellCount;
+        }
+        batteryCellCount = cells ? cells : 1;
+    }
+
+    batteryUpdateCellThresholds();
+}
+
+// END CELL_DETECT
 
 void batteryUpdatePresence(void)
 {
@@ -387,6 +460,7 @@ void batteryUpdatePresence(void)
 // Re-apply the cell count and its derived thresholds immediately, without a
 // battery disconnect/reconnect.  Used by MSP_SET_BATTERY_CONFIG so a battery
 // cell count written from the radio/configurator takes effect at once.
+// BEGIN CELL_REFRESH
 void batteryRefreshCellCount(void)
 {
     // Only refuse to apply when there is no pack at all.  The previous check
@@ -400,8 +474,18 @@ void batteryRefreshCellCount(void)
         return;
     }
 
+    // The cell count is frozen in flight: never change what the governor and
+    // the voltage alerts are using while the rotor is turning.
+    if (ARMING_FLAG(ARMED)) {
+        return;
+    }
+
+    // Writing 0 releases the lock and hands the count back to auto detection.
+    batteryCellCountLocked = (batteryConfig()->batteryCellCount != 0);
+
     batteryApplyCellCount();
 }
+// END CELL_REFRESH
 
 static void batteryUpdateVoltageState(void)
 {
@@ -655,6 +739,7 @@ void batteryInit(void)
     // presence
     batteryState = BATTERY_INIT;
     batteryCellCount = 0;
+    batteryCellCountLocked = false;
 
     // voltage
     voltageState = BATTERY_INIT;

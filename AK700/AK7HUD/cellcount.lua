@@ -80,6 +80,11 @@ function M.log(deps, text)
         local now = (deps and deps.now and deps.now()) or 0
         if #logLines >= 150 then table.remove(logLines, 1) end
         logLines[#logLines + 1] = string.format("%7d  %s", math.floor(now), tostring(text))
+        -- AK7HUD: do not touch the SD card while armed / rotor turning.  The
+        -- lines stay in RAM and are flushed once the aircraft is idle again.
+        if deps and deps.logAllowed and deps.logAllowed() == false then
+            return
+        end
         if now >= logFlushAt then
             logFlushAt = now + 400
             pcall(M.logFlush)
@@ -211,6 +216,16 @@ end
 -- mismatch triggers one soft reboot and a re-check.
 local function applyCells(ctx, wgt, cells, capacity)
     local deps = ctx.deps
+
+    -- AK7HUD: writing the cell count ends in MSP 250 (EEPROM erase/write),
+    -- which blocks the controller for tens of milliseconds.  Never do that
+    -- while armed or with the rotor turning.
+    if deps.unsafe and deps.unsafe(wgt) then
+        notice(deps, wgt, "STOP ROTOR TO WRITE CELLS", deps.colors.red)
+        M.log(deps, "  apply refused: armed / rotor running")
+        return false
+    end
+
     local queue = deps.getQueue()
     if not queue or type(queue.add) ~= "function" then
         notice(deps, wgt, "RF TOOL NOT READY", deps.colors.red)
@@ -529,6 +544,12 @@ function M.new(deps)
         M.log(deps, string.format("prompt: v=%d caps=%s unsafe=%s",
             tonumber(deps.voltageMv()) or 0,
             tostring(type(wgt) == "table" and wgt.profileCapacities ~= nil), tostring(unsafeNow)))
+        -- AK7HUD: the cell count is frozen in flight, so do not even open the
+        -- editor while armed or with the rotor turning.
+        if unsafeNow then
+            notice(deps, wgt, "STOP ROTOR TO CHANGE CELLS", deps.colors.red)
+            return false
+        end
         if ctx.nextStep == "alarm" then
             ctx.nextStep = nil
             M.log(deps, "  prompt: alarm step")
@@ -608,6 +629,9 @@ function M.new(deps)
         -- The stored value is applied by the controller only when the pack is
         -- reconnected, so poll every 2 s and confirm as soon as it happens.
         if not ctx.verifyPending then return end
+        -- AK7HUD: no MSP polling while armed / rotor turning; keep the pending
+        -- verify for the next idle moment.
+        if deps.unsafe and deps.unsafe(wgt) then return end
         if ctx.verifyAt and ctx.verifyAt > 0 and now > ctx.verifyAt then
             ctx.verifyPending = nil
             notice(deps, wgt, "CELLS NOT APPLIED - CHECK MANUALLY", deps.colors.red)
