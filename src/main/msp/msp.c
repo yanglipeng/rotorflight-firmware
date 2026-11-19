@@ -4331,7 +4331,8 @@ static mspResult_e mspCommonProcessInCommand(mspDescriptor_t srcDesc, int16_t cm
         // Legacy fields: values of the active battery profile
         const uint8_t profile = batteryConfig()->batteryProfile;
         batteryConfigMutable()->batteryCapacity[profile] = sbufReadU16(src);
-        batteryConfigMutable()->batteryCellCount[profile] = sbufReadU8(src);
+        const uint8_t legacyCellCount = sbufReadU8(src);
+        batteryConfigMutable()->batteryCellCount[profile] = legacyCellCount;
         batteryConfigMutable()->voltageMeterSource = sbufReadU8(src);
         batteryConfigMutable()->currentMeterSource = sbufReadU8(src);
         batteryConfigMutable()->vbatmincellvoltage[profile] = sbufReadU16(src);
@@ -4357,6 +4358,12 @@ static mspResult_e mspCommonProcessInCommand(mspDescriptor_t srcDesc, int16_t cm
             for (int i = 0; i < BATTERY_PROFILE_COUNT; i++)
                 batteryConfigMutable()->vbatwarningcellvoltage[i] = sbufReadU16(src);
         }
+        // A client that only knows the legacy layout (the radio cell-count
+        // widget reads the whole reply, patches the cell count byte and writes
+        // it back) puts the old value into the profile array above, which would
+        // undo the edit.  Both fields describe the same value for the active
+        // profile, so the legacy scalar wins.
+        batteryConfigMutable()->batteryCellCount[profile] = legacyCellCount;
         // Apply the new cell count (and derived thresholds) immediately, so a
         // value written from the radio/configurator takes effect without a
         // battery disconnect/reconnect.
